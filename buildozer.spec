@@ -6,17 +6,16 @@ source.dir = .
 source.include_exts = py,png,jpg,kv,atlas,ttf
 version = 0.1
 
-# 依赖保持不变
-requirements = python3,kivy==2.3.0,numpy,pyserial,pyjnius
+# 【注意】暂时去掉了 numpy，先确保能出一版 APK
+requirements = python3,kivy==2.3.0,pyserial,pyjnius
 
 orientation = portrait
 fullscreen = 0
 
-# Android 核心配置：锁定版本防止乱升级
 android.api = 31
 android.minapi = 21
+# 锁定一个稳定的 SDK/NDK 组合
 android.ndk = 25b
-# 【关键修复】锁定 build-tools 版本
 android.build_tools_version = 33.0.0
 android.archs = arm64-v8a
 
