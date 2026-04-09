@@ -1,6 +1,6 @@
 name: Build APK
-on: 
-  workflow_dispatch: # 这是一个“手动开关”，你可以点一下就打包一次
+on:
+  workflow_dispatch: 
 
 jobs:
   build:
@@ -11,19 +11,19 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt update
-          sudo apt install -y git zip unzip openjdk-17-jdk python3-pip autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake libffi-dev libssl-dev
+          # 增加了 libatlas-base-dev 和 gfortran，保证 numpy 能顺利编译
+          sudo apt install -y git zip unzip openjdk-17-jdk python3-pip autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake libffi-dev libssl-dev libatlas-base-dev gfortran
           pip3 install --user --upgrade buildozer cython virtualenv
 
       - name: Build with Buildozer
         run: |
-          # 自动同意安卓协议，并开始打包
+          # 自动同意安卓许可并开始编译
           yes | buildozer -v android debug
         env:
-          # GitHub Actions 必须带这个参数否则会报错
           BUILDOZER_WARN_ON_ROOT: 0
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: my-app-apk
+          name: ECG_Monitor_APK
           path: bin/*.apk
