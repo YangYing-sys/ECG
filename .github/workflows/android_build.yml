@@ -1,28 +1,28 @@
-name: Build Kivy ECG App
-on: [push]
+name: Build APK
+on: [push, pull_request]
+
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install System Dependencies
+
+      - name: Install dependencies
         run: |
-          sudo apt update && sudo apt install -y git zip unzip openjdk-17-jdk python3-pip autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake libffi-dev libssl-dev
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-      - name: Install Buildozer
+          sudo apt update
+          sudo apt install -y git zip unzip openjdk-17-jdk python3-pip autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake libffi-dev libssl-dev
+          pip3 install --user --upgrade buildozer cython virtualenv
+
+      - name: Build with Buildozer
         run: |
-          pip install --upgrade pip
-          pip install buildozer
-      - name: Build APK
-        run: |
-          echo "android.ndk = 25b" >> buildozer.spec
-          echo "android.sdk = 33" >> buildozer.spec
-          buildozer android debug
+          # 这一行最关键，使用 yes 对所有许可协议点赞同，避免脚本卡住
+          yes | buildozer -v android debug
+        env:
+          # 解决 buildozer 在 root 环境下运行的问题
+          BUILDOZER_ALLOW_ORG_DOC_ACCESS: 1
+
       - name: Upload APK
-        uses: actions/upload-artifact@v4
+        uses: actions/actions-upload-artifact@v4
         with:
-          name: ecg-monitor-apk
+          name: package
           path: bin/*.apk
