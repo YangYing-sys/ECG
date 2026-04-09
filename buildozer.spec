@@ -7,7 +7,8 @@ source.include_exts = py,png,jpg,kv,atlas,ttf
 version = 0.1
 
 # 【注意】暂时去掉了 numpy，先确保能出一版 APK
-requirements = python3,kivy==2.3.0,numpy==1.26.4,pyserial,pyjnius
+# 去掉 numpy 的版本号，改成下面这样
+requirements = python3,kivy==2.3.0,numpy,pyserial,pyjnius
 
 orientation = portrait
 fullscreen = 0
