@@ -8,18 +8,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install dependencies
+      - name: Install system dependencies
         run: |
           sudo apt update
-          # 把 libtinfo5 换成了 libtinfo6，并增加了编译 numpy 所需的 gfortran 和 libatlas
-          sudo apt install -y git zip unzip openjdk-17-jdk python3-pip autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo6 cmake libffi-dev libssl-dev libatlas-base-dev gfortran
-          pip3 install --user --upgrade buildozer cython virtualenv
+          sudo apt install -y git zip unzip openjdk-17-jdk python3-pip autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo6 cmake libffi-dev libssl-dev libatlas-base-dev gfortran liblapack-dev libblas-dev
+          # 必须显式安装 Cython 和 virtualenv
+          pip3 install --user --upgrade "buildozer>=1.5.0" "Cython<3.0" virtualenv
 
       - name: Build with Buildozer
         run: |
-          # 自动同意安卓许可并开始编译
-          # 第一次编译 numpy 会很慢，请看到进度条在走时耐心等待
-          yes | buildozer -v android debug
+          # 增加这一行，防止 NDK 编译时找不到低版本动态库的软链接
+          sudo ln -s /usr/lib/x86_64-linux-gnu/libtinfo.so.6 /usr/lib/x86_64-linux-gnu/libtinfo.so.5
+          
+          # 开始打包
+          buildozer -v android debug
         env:
           BUILDOZER_WARN_ON_ROOT: 0
 
