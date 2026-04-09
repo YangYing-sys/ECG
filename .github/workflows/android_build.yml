@@ -1,4 +1,4 @@
-name: Build APK
+name: Build APK with Numpy
 on:
   workflow_dispatch: 
 
@@ -8,29 +8,42 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # 【新增】强制设置 Java 17 环境，解决 gradlew 报错的关键
+      # 1. 锁定 Java 环境，解决 gradlew 报错
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Install dependencies
+      # 2. 安装安卓编译必须的底层系统库
+      - name: Install System Dependencies
         run: |
           sudo apt update
           sudo apt install -y git zip unzip openjdk-17-jdk python3-pip autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake libffi-dev libssl-dev
           pip3 install --user --upgrade buildozer "Cython<3.0" virtualenv
 
+      # 3. 【核心】缓存 Buildozer 编译环境。有了它，下次编译 numpy 飞快！
+      - name: Cache Buildozer and Android SDK/NDK
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.buildozer
+            .buildozer
+          key: ${{ runner.os }}-buildozer-${{ hashFiles('buildozer.spec') }}
+
+      # 4. 运行打包命令
       - name: Build with Buildozer
         run: |
-          # 增加 Gradle 内存限制，防止在 CI 环境下崩溃
+          # 增加内存限制，防止编译 numpy 时内存溢出崩溃
           export GRADLE_OPTS="-Dorg.gradle.jvmargs=-Xmx4G"
+          # 使用 -v 显示详细日志，yes 自动同意所有协议
           yes | buildozer -v android debug
         env:
           BUILDOZER_WARN_ON_ROOT: 0
 
+      # 5. 上传生成的 APK 结果
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: ECG_Monitor_APK
+          name: ECG_Monitor_Full_APK
           path: bin/*.apk
