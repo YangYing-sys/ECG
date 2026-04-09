@@ -11,13 +11,14 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt update
-          # 增加了 libatlas-base-dev 和 gfortran，保证 numpy 能顺利编译
-          sudo apt install -y git zip unzip openjdk-17-jdk python3-pip autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake libffi-dev libssl-dev libatlas-base-dev gfortran
+          # 把 libtinfo5 换成了 libtinfo6，并增加了编译 numpy 所需的 gfortran 和 libatlas
+          sudo apt install -y git zip unzip openjdk-17-jdk python3-pip autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo6 cmake libffi-dev libssl-dev libatlas-base-dev gfortran
           pip3 install --user --upgrade buildozer cython virtualenv
 
       - name: Build with Buildozer
         run: |
           # 自动同意安卓许可并开始编译
+          # 第一次编译 numpy 会很慢，请看到进度条在走时耐心等待
           yes | buildozer -v android debug
         env:
           BUILDOZER_WARN_ON_ROOT: 0
