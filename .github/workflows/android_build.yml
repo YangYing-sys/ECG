@@ -1,5 +1,6 @@
 name: Build APK
-on: [push, pull_request]
+on: 
+  workflow_dispatch: # 这是一个“手动开关”，你可以点一下就打包一次
 
 jobs:
   build:
@@ -15,14 +16,14 @@ jobs:
 
       - name: Build with Buildozer
         run: |
-          # 这一行最关键，使用 yes 对所有许可协议点赞同，避免脚本卡住
+          # 自动同意安卓协议，并开始打包
           yes | buildozer -v android debug
         env:
-          # 解决 buildozer 在 root 环境下运行的问题
-          BUILDOZER_ALLOW_ORG_DOC_ACCESS: 1
+          # GitHub Actions 必须带这个参数否则会报错
+          BUILDOZER_WARN_ON_ROOT: 0
 
       - name: Upload APK
-        uses: actions/actions-upload-artifact@v4
+        uses: actions/upload-artifact@v4
         with:
-          name: package
+          name: my-app-apk
           path: bin/*.apk
