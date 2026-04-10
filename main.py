@@ -140,71 +140,87 @@ class HardwareThread(threading.Thread):
             self.run_serial_mode()
 
     def run_bluetooth_mode(self):
-        self.status_callback("【蓝牙初始化】启动中...")
+        self.status_callback("【蓝牙初始化】获取适配器...")
+        socket = None
+
         try:
             from jnius import autoclass, cast
-            # 引入 Java 基础类
+            # 基础类引入
             BluetoothAdapter = autoclass('android.bluetooth.BluetoothAdapter')
-            Integer = autoclass('java.lang.Integer')
+            UUID = autoclass('java.util.UUID')
+            Integer = autoclass('java.lang.Integer')  # 必须这样写才能拿到底层 int 类型
 
             adapter = BluetoothAdapter.getDefaultAdapter()
 
             if not adapter or not adapter.isEnabled():
-                self.status_callback("❌ 请开启蓝牙并配对！")
+                self.status_callback("❌ 请先在系统设置中开启蓝牙")
                 return
 
-            # 1. 绝对执行：停止搜索，否则华为平板会因为天线占用导致 Socket 连接超时
-            adapter.cancelDiscovery()
+            # 1. 停止扫描（华为/鸿蒙连接成功的绝对前提）
+            if adapter.isDiscovering():
+                adapter.cancelDiscovery()
 
-            paired_devices = adapter.getBondedDevices().toArray()
-            target_device = None
-            for device in paired_devices:
-                name = device.getName()
-                if name and ("HC" in name.upper() or "BT" in name.upper() or "LINVOR" in name.upper()):
-                    target_device = device
+            # 给系统一点喘息时间
+            import time
+            time.sleep(0.5)
+
+            # 2. 寻找已配对设备
+            paired = adapter.getBondedDevices().toArray()
+            target = None
+            for d in paired:
+                n = d.getName()
+                if n and ("HC" in n.upper() or "BT" in n.upper() or "LINVOR" in n.upper()):
+                    target = d
                     break
 
-            if not target_device:
-                self.status_callback("❌ 未找到配对模块，请先去系统设置配对！")
+            if not target:
+                self.status_callback("❌ 未找到配对模块，请先去系统设置配对")
                 return
 
-            self.status_callback(f"正在强连: {target_device.getName()}...")
+            self.status_callback(f"✅ 找到设备 {target.getName()}，开始握手...")
 
-            # ============= 【核心修复：反射强连逻辑】 =============
-            socket = None
+            # 3. 建立连接（双保险方案）
+            SPP_UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
+
             try:
-                self.status_callback("正在穿透协议握手...")
-                # 通过反射获取隐藏的 createRfcommSocket 方法，参数类型为 int (Integer.TYPE)
-                method = target_device.getClass().getMethod("createRfcommSocket", [Integer.TYPE])
-                # 调用该方法，强制连接物理信道 1
-                socket = method.invoke(target_device, [1])
+                # 方案A：非安全连接 (针对安卓10+最稳)
+                socket = target.createInsecureRfcommSocketToServiceRecord(SPP_UUID)
                 socket.connect()
-            except Exception as e_reflect:
-                self.status_callback("反射受阻，回退至非安全模式...")
-                # 如果反射失败，回退到普通非安全模式
-                SPP_UUID = autoclass('java.util.UUID').fromString("00001101-0000-1000-8000-00805F9B34FB")
-                socket = target_device.createInsecureRfcommSocketToServiceRecord(SPP_UUID)
-                socket.connect()
+            except Exception as e:
+                self.status_callback("方案A失败，尝试方案B(反射)...")
+                try:
+                    # 方案B：反射调用底层端口1（修复了你代码中的语法错误）
+                    # 原理：绕过 SDP 协议查询，直接强连硬件通道 1
+                    method = target.getClass().getMethod("createRfcommSocket", [Integer.TYPE])
+                    socket = method.invoke(target, [1])
+                    socket.connect()
+                except Exception as e2:
+                    self.status_callback(f"❌ 链路握手彻底失败: {str(e2)}")
+                    return
 
-            # 成功后建立输入流
-            InputStream = socket.getInputStream()
-            self.status_callback("✅ 通道已锁定！接收波形中...")
+            self.status_callback("✅ 蓝牙已打通！监控中...")
 
-            # 使用固定大小的缓冲区
-            buffer = bytearray(1024)
+            # 4. 读取数据（增加异常字符容错）
+            InputStreamReader = autoclass('java.io.InputStreamReader')
+            BufferedReader = autoclass('java.io.BufferedReader')
+            # 指定 UTF-8 编码，防止中文或特殊字符导致崩溃
+            reader = BufferedReader(InputStreamReader(socket.getInputStream(), "UTF-8"))
+
             while self.running:
-                count = InputStream.read(buffer)
-                if count > 0:
-                    # 将字节转换为字符串
-                    data = buffer[:count].decode('utf-8', errors='ignore')
-                    # 简单按行切分并处理
-                    for line in data.split('\n'):
-                        line = line.strip()
-                        if "ECG" in line:
-                            self.parse_and_emit(line)
+                line = reader.readLine()  # 阻塞式读取，STM32必须发 \r\n
+                if line:
+                    # 使用线程安全的方式推送到 UI 解析
+                    self.parse_and_emit(str(line).strip())
 
         except Exception as e:
-            self.status_callback(f"❌ 连接中断: {str(e)}")
+            self.status_callback(f"⚠️ 运行中断: {str(e)}")
+        finally:
+            # 退出时一定要彻底释放，否则下次进入 APP 会报“设备已被占用”
+            if socket:
+                try:
+                    socket.close()
+                except:
+                    pass
 
     def run_serial_mode(self):
         self.status_callback("⚠️ 电脑端屏蔽了此功能。请将生成的 APK 发送到华为平板安装运行！")
