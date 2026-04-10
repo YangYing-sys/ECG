@@ -140,87 +140,61 @@ class HardwareThread(threading.Thread):
             self.run_serial_mode()
 
     def run_bluetooth_mode(self):
-        self.status_callback("【蓝牙初始化】获取适配器...")
-        socket = None
+        self.status_callback("【BLE模式】扫码设备中...")
+        from jnius import autoclass, PythonJavaClass, java_method
 
-        try:
-            from jnius import autoclass, cast
-            # 基础类引入
-            BluetoothAdapter = autoclass('android.bluetooth.BluetoothAdapter')
-            UUID = autoclass('java.util.UUID')
-            Integer = autoclass('java.lang.Integer')  # 必须这样写才能拿到底层 int 类型
+        # 1. 声明安卓 BLE 核心类
+        BluetoothAdapter = autoclass('android.bluetooth.BluetoothAdapter')
+        UUID = autoclass('java.util.UUID')
 
-            adapter = BluetoothAdapter.getDefaultAdapter()
+        # 绝大多数仿冒 HC-05 的 BLE 模块串口 UUID 都是这个 FFE0 / FFE1
+        SERVICE_UUID = UUID.fromString("0000ffe0-0000-1000-8000-00805f9b34fb")
+        CHAR_UUID = UUID.fromString("0000ffe1-0000-1000-8000-00805f9b34fb")
+        CLIENT_CONFIG_DESCRIPTOR = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
-            if not adapter or not adapter.isEnabled():
-                self.status_callback("❌ 请先在系统设置中开启蓝牙")
-                return
+        # 2. 定义回调（这是最烦人的部分，BLE 是异步的）
+        class GattCallback(PythonJavaClass):
+            __javainterfaces__ = ['android/bluetooth/BluetoothGattCallback']
+            __javacontext__ = 'app'
 
-            # 1. 停止扫描（华为/鸿蒙连接成功的绝对前提）
-            if adapter.isDiscovering():
-                adapter.cancelDiscovery()
+            def __init__(self, outer):
+                super().__init__()
+                self.outer = outer
 
-            # 给系统一点喘息时间
-            import time
-            time.sleep(0.5)
+            @java_method('(Landroid/bluetooth/BluetoothGatt;II)V')
+            def onConnectionStateChange(self, gatt, status, newState):
+                if newState == 2:  # Connected
+                    self.outer.status_callback("✅ 物理连接成功，发现服务中...")
+                    gatt.discoverServices()
+                elif newState == 0:  # Disconnected
+                    self.outer.status_callback("❌ BLE 连接已断开")
 
-            # 2. 寻找已配对设备
-            paired = adapter.getBondedDevices().toArray()
-            target = None
-            for d in paired:
-                n = d.getName()
-                if n and ("HC" in n.upper() or "BT" in n.upper() or "LINVOR" in n.upper()):
-                    target = d
-                    break
+            @java_method('(Landroid/bluetooth/BluetoothGatt;I)V')
+            def onServicesDiscovered(self, gatt, status):
+                service = gatt.getService(SERVICE_UUID)
+                if service:
+                    char = service.getCharacteristic(CHAR_UUID)
+                    # 开启通知(Notify)，这样模块发数据，APP 才能收到
+                    gatt.setCharacteristicNotification(char, True)
+                    desc = char.getDescriptor(CLIENT_CONFIG_DESCRIPTOR)
+                    desc.setValue(autoclass('android.bluetooth.BluetoothGattDescriptor').ENABLE_NOTIFICATION_VALUE)
+                    gatt.writeDescriptor(desc)
+                    self.outer.status_callback("🚀 串口通道已打开！")
 
-            if not target:
-                self.status_callback("❌ 未找到配对模块，请先去系统设置配对")
-                return
+            @java_method('(Landroid/bluetooth/BluetoothGatt;Landroid/bluetooth/BluetoothGattCharacteristic;)V')
+            def onCharacteristicChanged(self, gatt, char):
+                # 收到数据了！
+                data = char.getStringValue(0)
+                # 因为 BLE 会分段发送，这里建议把数据拼接到缓冲区再解析
+                self.outer.parse_and_emit(data)
 
-            self.status_callback(f"✅ 找到设备 {target.getName()}，开始握手...")
-
-            # 3. 建立连接（双保险方案）
-            SPP_UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
-
-            try:
-                # 方案A：非安全连接 (针对安卓10+最稳)
-                socket = target.createInsecureRfcommSocketToServiceRecord(SPP_UUID)
-                socket.connect()
-            except Exception as e:
-                self.status_callback("方案A失败，尝试方案B(反射)...")
-                try:
-                    # 方案B：反射调用底层端口1（修复了你代码中的语法错误）
-                    # 原理：绕过 SDP 协议查询，直接强连硬件通道 1
-                    method = target.getClass().getMethod("createRfcommSocket", [Integer.TYPE])
-                    socket = method.invoke(target, [1])
-                    socket.connect()
-                except Exception as e2:
-                    self.status_callback(f"❌ 链路握手彻底失败: {str(e2)}")
-                    return
-
-            self.status_callback("✅ 蓝牙已打通！监控中...")
-
-            # 4. 读取数据（增加异常字符容错）
-            InputStreamReader = autoclass('java.io.InputStreamReader')
-            BufferedReader = autoclass('java.io.BufferedReader')
-            # 指定 UTF-8 编码，防止中文或特殊字符导致崩溃
-            reader = BufferedReader(InputStreamReader(socket.getInputStream(), "UTF-8"))
-
-            while self.running:
-                line = reader.readLine()  # 阻塞式读取，STM32必须发 \r\n
-                if line:
-                    # 使用线程安全的方式推送到 UI 解析
-                    self.parse_and_emit(str(line).strip())
-
-        except Exception as e:
-            self.status_callback(f"⚠️ 运行中断: {str(e)}")
-        finally:
-            # 退出时一定要彻底释放，否则下次进入 APP 会报“设备已被占用”
-            if socket:
-                try:
-                    socket.close()
-                except:
-                    pass
+        # 3. 寻找并连接设备（建议直接用你图中那个 MAC 地址)
+        adapter = BluetoothAdapter.getDefaultAdapter()
+        # 换成你图片中显示的那个 MAC 地址
+        device = adapter.getRemoteDevice("29:6B:A7:4A:48:40")
+        self.callback_instance = GattCallback(self)
+        self.gatt = device.connectGatt(autoclass('org.kivy.android.PythonActivity').mActivity, False,
+                                       self.callback_instance)
 
     def run_serial_mode(self):
         self.status_callback("⚠️ 电脑端屏蔽了此功能。请将生成的 APK 发送到华为平板安装运行！")
