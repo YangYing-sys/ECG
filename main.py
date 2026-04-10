@@ -150,44 +150,49 @@ class HardwareThread(threading.Thread):
                 self.status_callback("❌ 请先开启平板蓝牙并配对！")
                 return
 
-            # ============== 【核心优化 1：强制停止搜索】 ==============
-            # 华为等手机开启蓝牙时可能在后台搜索，如果不停止，Socket 连不上
+            # 【关键优化 1】必须停止搜索，否则华为平板会因为天线占用导致 Socket 连接超时
             if adapter.isDiscovering():
                 adapter.cancelDiscovery()
 
             paired_devices = adapter.getBondedDevices().toArray()
-            # 标准 SPP UUID，不要改
             SPP_UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
 
             target_device = None
             for device in paired_devices:
-                if "HC" in device.getName().upper() or "BT" in device.getName().upper():
+                # 增加了一个 LINVOR 判断，有些 HC-05 默认叫这个名字
+                name = device.getName()
+                if name and ("HC" in name.upper() or "BT" in name.upper() or "LINVOR" in name.upper()):
                     target_device = device
                     break
 
             if not target_device:
-                self.status_callback("❌ 未找到已配对的 HC-05，请先在系统设置里配对。")
+                self.status_callback("❌ 未找到配对的蓝牙模块，请检查平板设置！")
                 return
 
-            self.status_callback(f"连接中: {target_device.getName()}...")
+            self.status_callback(f"正在尝试连接: {target_device.getName()}...")
 
-            # ============== 【核心优化 2：双模式握手】 ==============
+            # ================== 【核心：回退机制逻辑】 ==================
             socket = None
             try:
-                # 方案 A：尝试安全连接 (Secure Socket)
+                self.status_callback("尝试 [安全协议] 连接...")
                 socket = target_device.createRfcommSocketToServiceRecord(SPP_UUID)
+                adapter.cancelDiscovery()  # 必须写！确保连接时蓝牙天线不被扫描任务占用
                 socket.connect()
-            except Exception as e1:
+            except Exception as e_secure:
+                # 如果安全连接失败（华为/鸿蒙系统常见报错），进入 except
                 try:
-                    # 方案 B：如果 A 失败（华为常见），尝试非安全连接 (Insecure Socket)
-                    self.status_callback("安全通道受阻，尝试备用通道...")
+                    self.status_callback("安全验证受阻，切换为 [非安全直连] 模式...")
+                    # 【关键点】这里调用 Insecure 方法，它能跳过很多严格的握手协议，
+                    # 极大提高对 HC-05 这种老旧蓝牙 2.0 模块的兼容性。
                     socket = target_device.createInsecureRfcommSocketToServiceRecord(SPP_UUID)
+                    adapter.cancelDiscovery()  # 必须写！确保连接时蓝牙天线不被扫描任务占用
                     socket.connect()
-                except Exception as e2:
-                    self.status_callback(f"❌ 通道打不开。错误: {e2}")
+                except Exception as e_insecure:
+                    self.status_callback(f"❌ 链路握手彻底失败: {str(e_insecure)}")
                     return
+            # ==========================================================
 
-            # 成功后获取流
+            # 成功后建立流数据读取
             InputStreamReader = autoclass('java.io.InputStreamReader')
             BufferedReader = autoclass('java.io.BufferedReader')
             java_reader = BufferedReader(InputStreamReader(socket.getInputStream()))
@@ -200,7 +205,7 @@ class HardwareThread(threading.Thread):
                     self.parse_and_emit(str(line).strip())
 
         except Exception as e:
-            self.status_callback(f"蓝牙底层异常: {str(e)}")
+            self.status_callback(f"⚠️ 底层逻辑错误: {str(e)}")
 
     def run_serial_mode(self):
         self.status_callback("⚠️ 电脑端屏蔽了此功能。请将生成的 APK 发送到华为平板安装运行！")
