@@ -139,8 +139,7 @@ class HardwareThread(threading.Thread):
             self.run_serial_mode()
 
     def run_bluetooth_mode(self):
-        self.status_callback("【蓝牙初始化】获取底层蓝牙适配器中...")
-        time.sleep(1)
+        self.status_callback("【蓝牙初始化】获取适配器中...")
         try:
             from jnius import autoclass
             BluetoothAdapter = autoclass('android.bluetooth.BluetoothAdapter')
@@ -148,36 +147,52 @@ class HardwareThread(threading.Thread):
             adapter = BluetoothAdapter.getDefaultAdapter()
 
             if not adapter or not adapter.isEnabled():
-                self.status_callback("❌ 【严重错误】蓝牙未开启！\n请下拉菜单打开蓝牙，并在系统里将蓝牙模块成功配对！")
+                self.status_callback("❌ 请先开启平板蓝牙并配对！")
                 return
 
+            # ============== 【核心优化 1：强制停止搜索】 ==============
+            # 华为等手机开启蓝牙时可能在后台搜索，如果不停止，Socket 连不上
+            if adapter.isDiscovering():
+                adapter.cancelDiscovery()
+
             paired_devices = adapter.getBondedDevices().toArray()
+            # 标准 SPP UUID，不要改
             SPP_UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
 
             target_device = None
-            device_names = []
             for device in paired_devices:
-                name = device.getName()
-                if name:
-                    device_names.append(name)
-                    if ("HC" in name.upper() or "BT" in name.upper() or "JDY" in name.upper() or "LE" in name.upper()):
-                        target_device = device
-                        break
+                if "HC" in device.getName().upper() or "BT" in device.getName().upper():
+                    target_device = device
+                    break
 
             if not target_device:
-                self.status_callback(f"❌ 蓝牙列表中没发现可用设备！\n已配对列表: {device_names}\n请去设置重新配对模块。")
+                self.status_callback("❌ 未找到已配对的 HC-05，请先在系统设置里配对。")
                 return
 
-            self.status_callback(f"【尝试连接】锁定目标: {target_device.getName()}，正在建立底层射频通道...")
+            self.status_callback(f"连接中: {target_device.getName()}...")
 
-            socket = target_device.createInsecureRfcommSocketToServiceRecord(SPP_UUID)
-            socket.connect()
+            # ============== 【核心优化 2：双模式握手】 ==============
+            socket = None
+            try:
+                # 方案 A：尝试安全连接 (Secure Socket)
+                socket = target_device.createRfcommSocketToServiceRecord(SPP_UUID)
+                socket.connect()
+            except Exception as e1:
+                try:
+                    # 方案 B：如果 A 失败（华为常见），尝试非安全连接 (Insecure Socket)
+                    self.status_callback("安全通道受阻，尝试备用通道...")
+                    socket = target_device.createInsecureRfcommSocketToServiceRecord(SPP_UUID)
+                    socket.connect()
+                except Exception as e2:
+                    self.status_callback(f"❌ 通道打不开。错误: {e2}")
+                    return
 
+            # 成功后获取流
             InputStreamReader = autoclass('java.io.InputStreamReader')
             BufferedReader = autoclass('java.io.BufferedReader')
             java_reader = BufferedReader(InputStreamReader(socket.getInputStream()))
 
-            self.status_callback("✅ 【通道打通】硬件握手成功！波形稳定入轨，启动内源测录。")
+            self.status_callback("✅ 蓝牙已打通！等待波形...")
 
             while self.running:
                 line = java_reader.readLine()
@@ -185,8 +200,7 @@ class HardwareThread(threading.Thread):
                     self.parse_and_emit(str(line).strip())
 
         except Exception as e:
-            err_str = str(e)
-            self.status_callback(f"【连接彻底失败】请看下方报错找原因:\n{err_str}")
+            self.status_callback(f"蓝牙底层异常: {str(e)}")
 
     def run_serial_mode(self):
         self.status_callback("⚠️ 电脑端屏蔽了此功能。请将生成的 APK 发送到华为平板安装运行！")
