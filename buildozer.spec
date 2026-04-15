@@ -12,7 +12,8 @@ requirements = python3,kivy==2.3.0,numpy,pyserial,jnius
 orientation = portrait
 fullscreen = 0
 
-android.api = 31
+android.api = 30
+
 android.minapi = 21
 
 android.ndk = 25b
