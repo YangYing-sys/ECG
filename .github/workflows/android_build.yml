@@ -18,8 +18,10 @@ jobs:
           pip install buildozer cython==0.29.33
 
       - name: Build with Buildozer
-        run: buildozer android debug
-        # 这一步会跑很久，大约 15-20 分钟
+        # 这里加入了 yes | 指令，强行给所有弹出窗口回复 "y" (同意协议)
+        run: |
+          mkdir -p ~/.android && touch ~/.android/repositories.cfg
+          yes | buildozer android debug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
