@@ -1,57 +1,28 @@
-name: Build APK with Numpy
-on:
-  workflow_dispatch: 
+name: Build_ECG_App
+on: [workflow_dispatch] # 手动触发打包
 
 jobs:
   build:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
-
-      # 1. 锁定 Java 环境，解决 gradlew 报错
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          java-version: '17'
-          distribution: 'temurin'
+          python-version: '3.10'
 
-      # 2. 安装安卓编译必须的底层系统库
-      - name: Install System Dependencies
+      - name: Install dependencies
         run: |
-          sudo apt update
-          sudo apt install -y git zip unzip openjdk-17-jdk python3-pip autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake libffi-dev libssl-dev
-          pip3 install --user --upgrade buildozer "Cython<3.0" virtualenv
+          sudo apt-get update
+          sudo apt-get install -y git zip unzip openjdk-17-jdk autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake libffi-dev libssl-dev
+          pip install buildozer cython==0.29.33
 
-      # 3. 【核心】缓存 Buildozer 编译环境。有了它，下次编译 numpy 飞快！
-      - name: Cache Buildozer and Android SDK/NDK
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.buildozer
-            .buildozer
-          key: ${{ runner.os }}-buildozer-${{ hashFiles('buildozer.spec') }}
-          
       - name: Build with Buildozer
-        run: |
-          # 强制更新一下 Cython，numpy 编译极度依赖它
-          pip3 install --user "Cython<3.0" 
-          export GRADLE_OPTS="-Dorg.gradle.jvmargs=-Xmx4G"
-          # 使用 -v 看到详细过程，yes 自动点确定
-          yes | buildozer -v android debug
-          
-      # 4. 运行打包命令
-      - name: Build with Buildozer
-        run: |
-          # 增加内存限制，防止编译 numpy 时内存溢出崩溃
-          export GRADLE_OPTS="-Dorg.gradle.jvmargs=-Xmx4G"
-          # 使用 -v 显示详细日志，yes 自动同意所有协议
-          yes | buildozer -v android debug
-        env:
-          BUILDOZER_WARN_ON_ROOT: 0
+        run: buildozer android debug
+        # 这一步会跑很久，大约 15-20 分钟
 
-      # 5. 上传生成的 APK 结果
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: ECG_Monitor_Full_APK
+          name: ECG-App-Package
           path: bin/*.apk
