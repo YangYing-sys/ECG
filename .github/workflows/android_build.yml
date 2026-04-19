@@ -34,46 +34,22 @@ jobs:
             zlib1g-dev libncurses5-dev libncursesw5-dev \
             libtinfo5 cmake libffi-dev libssl-dev \
             build-essential ccache \
-            libltdl-dev libsqlite3-dev libusb-1.0-0 wget
+            libltdl-dev libsqlite3-dev libusb-1.0-0
 
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip setuptools wheel
+          # 限定 cython 版本，这是 kivy 编译安卓必须的
           pip install buildozer cython==0.29.33
 
-      - name: Install Android command line tools (Fixed Path Issue)
+      - name: Build with Buildozer (Auto YES)
         run: |
-          mkdir -p $HOME/android-sdk
-          cd $HOME/android-sdk
-          # 加上 -q 安静模式，防止长串下载日志卡死 GitHub 界面
-          wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O cmdline-tools.zip
-          unzip -q cmdline-tools.zip
-          # 关键修复：先改名为 latest，再装进新建的 cmdline-tools 文件夹，完美避开层级冲突
-          mv cmdline-tools latest
-          mkdir cmdline-tools
-          mv latest cmdline-tools/
-
-      - name: Set Android SDK environment variables
-        run: |
-          echo "ANDROID_SDK_ROOT=$HOME/android-sdk" >> $GITHUB_ENV
-          echo "ANDROID_HOME=$HOME/android-sdk" >> $GITHUB_ENV
-          echo "$HOME/android-sdk/cmdline-tools/latest/bin" >> $GITHUB_PATH
-          echo "$HOME/android-sdk/platform-tools" >> $GITHUB_PATH
-
-      - name: Auto-accept Android SDK licenses and install base tools
-        run: |
-          mkdir -p $HOME/.android
-          touch $HOME/.android/repositories.cfg
-          yes | sdkmanager --licenses || true
-          sdkmanager "platform-tools" "platforms;android-31" "build-tools;34.0.0"
+          # 第一重保障：动态向你的 buildozer.spec 中强制注入“同意安装许可”的指令
+          sed -i 's/\[app\]/\[app\]\nandroid.accept_sdk_license = True/' buildozer.spec
           
-          # 【双保险】为了防止 Buildozer 傲娇非要在自己的内建目录里找许可证，直接硬拷贝一份过去
-          mkdir -p $HOME/.buildozer/android/platform/android-sdk
-          cp -r $HOME/android-sdk/licenses $HOME/.buildozer/android/platform/android-sdk/ || true
-
-      - name: Build with Buildozer
-        run: |
-          buildozer android debug
+          # 第二重保障：利用管道传 "y"，强行通过它在后台弹出的任何 (y/N) 确认提示
+          set +o pipefail
+          yes | buildozer android debug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
