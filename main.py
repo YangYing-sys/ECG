@@ -23,8 +23,6 @@ from kivy.uix.popup import Popup
 import os
 import csv
 from datetime import datetime, timedelta
-from kivy.utils import platform
-from kivy.app import App
 
 class CSVDataManager:
     def __init__(self):
@@ -146,8 +144,7 @@ class RichLogBox(Label):
         self.text_size = (self.width - 30, self.height - 30)
 
 # ==========================================
-# 1. 强化版硬件线程
-# 仅补安卓 HC-05 经典蓝牙，不动你的算法与UI
+# 1. 强化版硬件线程 (包含安卓蓝牙修补)
 # ==========================================
 class HardwareThread(threading.Thread):
     def __init__(self, data_callback, status_callback):
@@ -166,7 +163,6 @@ class HardwareThread(threading.Thread):
         except Exception as e:
             self.status_callback(f"【链路中断】: {str(e)}")
 
-    # ===== 新增：安卓 HC-05 经典蓝牙模式 =====
     def run_bluetooth_mode(self):
         self.status_callback("【探测中】正在寻找已配对 HC-05 蓝牙链路...")
 
@@ -189,14 +185,12 @@ class HardwareThread(threading.Thread):
                 self.status_callback("【错误】蓝牙未开启，请先在系统设置中打开蓝牙")
                 return
 
-            # 经典蓝牙连接前，停止扫描可提升成功率
             try:
                 if adapter.isDiscovering():
                     adapter.cancelDiscovery()
             except:
                 pass
 
-            # 获取已配对设备
             try:
                 bonded = adapter.getBondedDevices()
                 paired_devices = bonded.toArray()
@@ -217,7 +211,6 @@ class HardwareThread(threading.Thread):
                     if name:
                         device_names.append(name)
                         upper_name = name.upper()
-                        # 尽量兼容常见命名
                         if (
                             "HC-05" in upper_name or
                             "HC05" in upper_name or
@@ -241,7 +234,6 @@ class HardwareThread(threading.Thread):
             spp_uuid = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
             last_err = None
 
-            # 先尝试安全连接
             try:
                 socket = target_device.createRfcommSocketToServiceRecord(spp_uuid)
                 socket.connect()
@@ -254,7 +246,6 @@ class HardwareThread(threading.Thread):
                     pass
                 socket = None
 
-            # 再尝试不安全连接
             if socket is None:
                 try:
                     socket = target_device.createInsecureRfcommSocketToServiceRecord(spp_uuid)
@@ -269,7 +260,7 @@ class HardwareThread(threading.Thread):
                     socket = None
 
             if socket is None:
-                self.status_callback(f"【蓝牙连接失败】{str(last_err)}")
+                self.status_callback(f"【蓝牙连接失败】{str(last_err)}\n(请确认模块是否通电，或重启模块重配对)")
                 return
 
             self.status_callback("【硬件握手成功】蓝牙链路已打通，开始接收波形数据...")
@@ -288,7 +279,7 @@ class HardwareThread(threading.Thread):
                     break
 
         except Exception as e:
-            self.status_callback(f"【安卓蓝牙异常】{str(e)}")
+            self.status_callback(f"【安卓蓝牙异常】{str(e)}\n可能是缺少蓝牙/附近设备权限")
         finally:
             try:
                 if socket:
@@ -452,20 +443,16 @@ class ECGPlotWidget(FloatLayout):
 
         final_value = self.last_smoothed * 1.8
 
-        if final_value > 80:
-            final_value = 80
-        if final_value < -80:
-            final_value = -80
+        if final_value > 80: final_value = 80
+        if final_value < -80: final_value = -80
 
         self.ecg_buffer[self.ptr] = final_value
         self.ptr = (self.ptr + 1) % self.data_len
 
     def render(self, dt):
-        if not hasattr(self, 'plot_rect'):
-            return
+        if not hasattr(self, 'plot_rect'): return
         plot_x, plot_y, plot_w, plot_h = self.plot_rect
-        if plot_w <= 0 or plot_h <= 0:
-            return
+        if plot_w <= 0 or plot_h <= 0: return
 
         points = []
         x_step = plot_w / (self.data_len - 1)
@@ -495,7 +482,6 @@ class ECGPlotWidget(FloatLayout):
 # ==========================================
 class ECGApp(App):
     def build(self):
-        # ===== 新增：安卓运行时权限，仅补权限，不改UI =====
         if platform == 'android':
             try:
                 from android.permissions import request_permissions
@@ -513,7 +499,6 @@ class ECGApp(App):
                 print("权限申请失败:", e)
 
         self.title = "AI辅助心电预警系统 "
-
         self.current_bpm = 0
         self.current_hrv = 0
         self.current_rhythm = "Normal"
@@ -526,7 +511,6 @@ class ECGApp(App):
 
         root = BoxLayout(orientation='vertical', padding=15, spacing=12)
 
-        # ====== 顶部信息 ======
         top_row = BoxLayout(size_hint_y=0.15, spacing=15)
         left_col = BoxLayout(orientation='horizontal', size_hint_x=0.25)
         self.heart_label = Label(text="❤️", font_size='40sp', halign='center', valign='middle', font_name=EMOJI_FONT)
@@ -561,11 +545,9 @@ class ECGApp(App):
         top_row.add_widget(right_col)
         root.add_widget(top_row)
 
-        # ====== 中部波形图 ======
         self.graph = ECGPlotWidget(size_hint_y=0.6)
         root.add_widget(self.graph)
 
-        # ====== 底部日志 ======
         self.advice_box = RichLogBox(size_hint_y=0.25)
         self.advice_box.text = f"{E('💡')} 系统核心引擎启动，连接协议寻址中...\n(注：请确保单片机电极片已可靠粘连皮肤)"
         root.add_widget(self.advice_box)
@@ -573,7 +555,6 @@ class ECGApp(App):
         Clock.schedule_interval(self.update_ui, 0.5)
         self.heart_anim_event = Clock.schedule_interval(self.animate_heart, 0.8)
 
-        # 保持你的原逻辑：启动即开线程
         self.hw_thread = HardwareThread(self.on_serial_data, self.update_conn_ui)
         self.hw_thread.start()
 
@@ -586,7 +567,6 @@ class ECGApp(App):
 
     def on_serial_data(self, ecg_val, bpm_val, hrv_val, rhythm_str):
         self.last_valid_data_time = time.time()
-
         self.graph.push_data(ecg_val)
         if bpm_val > 0:
             self.current_bpm = bpm_val
@@ -651,12 +631,13 @@ class ECGApp(App):
                 self.advice_box.text = (
                     f"{E('⚠️')}【检测中断警告：链路静默】\n"
                     "未侦测到实时硬件波形！请确认：\n"
-                    "1. 连接线是否插稳，COM通讯端是否被其他程序干死占用。\n"
-                    "2. 传感器导联金属片是否完全贴紧肌肤导电。"
+                    "1. 连接线是否插稳，COM通讯端是否被占用。\n"
+                    "2. 传感器导联金属片是否完全贴紧肌肤导电。\n"
+                    "3. 蓝牙是否突然断开（如是，退出APP重进）。"
                 )
                 self.diag_status = 'IDLE'
                 self.btn_diag.disabled = False
-                self.btn_diag.text = "重置以打通硬体链路"
+                self.btn_diag.text = "重置以重新连接"
                 self.status_label.text = "状态: 失去硬件连接响应"
                 self.status_label.color = get_color_from_hex('#e74c3c')
             return
