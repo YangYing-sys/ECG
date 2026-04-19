@@ -46,7 +46,7 @@ android.api = 31
 android.minapi = 21
 
 # 打包的 CPU 架构 (同时支持绝大部分新旧手机和模拟器)
-android.archs = arm64-v8a, armeabi-v7a
+android.archs = arm64-v8a
 
 # 允许应用备份
 android.allow_backup = True
