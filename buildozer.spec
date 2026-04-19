@@ -1,63 +1,185 @@
 [app]
 
-# 应用的名称 (安装在手机上显示的完整名称)
-title = AI ECG Monitor
+# (str) Title of your application
+title = ECG App
 
-# 包名 (非常重要！全小写英文，不要有空格，用来区分旧版本)
-package.name = aiecgmonitor
+# (str) Package name
+package.name = ecgapp
 
-# 域名前缀
-package.domain = org.test
+# (str) Package domain (needed for android/ios packaging)
+package.domain = org.yangying
 
-# 源代码所在目录 ('.' 代表当前目录)
+# (str) Source code where the main.py live
 source.dir = .
 
-# 【关键】允许打包进 APK 的文件类型！ (必须加 ttf 和 csv，否则字体加载失败直接闪退)
+# (list) Source files to include
 source.include_exts = py,png,jpg,kv,atlas,ttf,csv
 
-# 应用版本号
-version = 0.1
+# (list) List of inclusions using pattern matching
+source.include_patterns = assets/*,images/*,fonts/*
 
-# 【关键】Python 依赖包！打包时会自动下载这些
+# (list) Source files to exclude
+source.exclude_exts = spec
+
+# (list) List of directory to exclude
+source.exclude_dirs = tests, bin, venv, .git, __pycache__
+
+# (list) List of exclusions using pattern matching
+source.exclude_patterns = *.pyc,*.pyo,*.git/*
+
+# (str) Application versioning
+version = 1.0
+
+# (list) Application requirements
 requirements = python3,kivy,numpy,pyjnius,pyserial
 
-# 屏幕方向 (设置竖屏)
+# (str) Custom source folders for requirements
+# requirements.source.kivy = ../../kivy
+
+# (list) Garden requirements
+# garden_requirements =
+
+# (str) Presplash of the application
+# presplash.filename = %(source.dir)s/data/presplash.png
+
+# (str) Icon of the application
+# icon.filename = %(source.dir)s/data/icon.png
+
+# (str) Supported orientation (one of landscape, sensorLandscape, portrait or all)
 orientation = portrait
 
-# 是否全屏 (0=显示顶部状态栏，时间/电量等)
+# (bool) Indicate if the application should be fullscreen or not
 fullscreen = 0
 
-# 如果你有图标，取消下一行的注释，并保证目录下有个 icon.png
-# icon.filename = icon.png
+# (string) Presplash background color (for android toolchain)
+# Supported formats are: #RRGGBB #AARRGGBB or one of the following names:
+# red, blue, green, black, white, gray, cyan, magenta, yellow, lightgray,
+# darkgray, grey, lightgrey, darkgrey, aqua, fuchsia, lime, maroon, navy,
+# olive, purple, silver, teal.
+# android.presplash_color = #FFFFFF
 
-# ==========================================
-# 安卓 (Android) 专属配置
-# ==========================================
+#
+# Android specific
+#
 
-# 【极度关键】申请安卓所需的系统权限
-# 涵盖：蓝牙、蓝牙管理、精准定位、粗略定位、读写存储、网络
-# 涵盖了 Android 12 以上强制新增的 BLUETOOTH_CONNECT 和 BLUETOOTH_SCAN
-android.permissions = BLUETOOTH, BLUETOOTH_ADMIN, ACCESS_FINE_LOCATION, ACCESS_COARSE_LOCATION, READ_EXTERNAL_STORAGE, WRITE_EXTERNAL_STORAGE, INTERNET, BLUETOOTH_CONNECT, BLUETOOTH_SCAN
+# (bool) Indicate if the application should be fullscreen or not
+android.fullscreen = 0
 
-# 目标 Android API 版本 (建议31，能完美兼容目前市面上的新老手机)
+# (string) The name of the Android entry point, default is ok for Kivy apps
+android.entrypoint = org.kivy.android.PythonActivity
+
+# (string) Presplash filename for android
+# android.presplash = %(source.dir)s/data/presplash.png
+
+# (string) Icon filename for android
+# android.icon = %(source.dir)s/data/icon.png
+
+# (list) Permissions
+android.permissions = BLUETOOTH,BLUETOOTH_ADMIN,BLUETOOTH_CONNECT,BLUETOOTH_SCAN,ACCESS_FINE_LOCATION,ACCESS_COARSE_LOCATION,READ_EXTERNAL_STORAGE,WRITE_EXTERNAL_STORAGE
+
+# (int) Android API to use
 android.api = 31
 
-# 最低支持的 Android API 版本 (21 代表支持安卓 5.0 以上)
+# (int) Minimum API required
 android.minapi = 21
 
-# 打包的 CPU 架构 (同时支持绝大部分新旧手机和模拟器)
-android.archs = arm64-v8a
+# (int) Android SDK version to use
+android.sdk = 31
 
-# 允许应用备份
+# (str) Android NDK version
+android.ndk = 25b
+
+# (int) Android NDK API to use
+android.ndk_api = 21
+
+# (list) Android architectures to build for
+android.archs = arm64-v8a, armeabi-v7a
+
+# (bool) Use AndroidX
+android.enable_androidx = True
+
+# (list) Add android.gradle_dependencies if needed
+# android.gradle_dependencies =
+
+# (list) Java classes to add to the android project
+# android.add_src =
+
+# (list) Android AAR archives to add
+# android.add_aars =
+
+# (list) Put these files or directories in the apk assets directory.
+# android.add_assets =
+
+# (list) Put these files or directories in the apk res directory.
+# android.add_resources =
+
+# (str) Android logcat filters to use
+android.logcat_filters = *:S python:D
+
+# (bool) Copy libs instead of making a libpymodules.so
+android.copy_libs = 1
+
+# (bool) Backup your application data when installing newer versions
 android.allow_backup = True
 
-# ==========================================
-# Buildozer 打包环境配置
-# ==========================================
-[buildozer]
+# (str) The format used to package the app for release mode (aab or apk)
+android.release_artifact = apk
 
-# 日志级别 (2=输出详细打包日志，万一报错可以看清原因)
+# (bool) Enable hardware acceleration
+android.hardware_accelerated = True
+
+# (list) OUYA Console category. Should be one of GAME or APP
+# android.ouya.category = GAME
+
+# (str) Extra manifest XML to write directly inside the <manifest> element
+# android.extra_manifest_xml = ./src/android/extra_manifest.xml
+
+# (str) Extra manifest application arguments to write directly inside the <application> tag
+# android.extra_manifest_application_arguments =
+
+# (str) Full name including package path of the Java class that implements Android Activity
+# android.activity_class_name = org.kivy.android.PythonActivity
+
+# (str) Extra xml to write directly inside the <resources> element of values/strings.xml
+# android.extra_strings_xml =
+
+# (bool) Enable AAPT2
+android.enable_aapt2 = False
+
+#
+# Python for android (p4a) specific
+#
+
+# (str) python-for-android fork to use, if not specified, default is used
+p4a.fork = kivy
+
+# (str) python-for-android branch to use, defaults to master
+p4a.branch = master
+
+# (str) Local version of python-for-android to use
+# p4a.source_dir =
+
+# (list) python-for-android bootstraps to use
+# p4a.bootstrap = sdl2
+
+# (str) Extra command line arguments to pass to python-for-android
+# p4a.extra_args =
+
+#
+# Buildozer specific
+#
+
+# (int) Log level (0 = error only, 1 = info, 2 = debug)
 log_level = 2
 
-# 忽略 root 警告 (在 GitHub Actions 自动化打包里必须设为 0)
-warn_on_root = 0
+# (int) Display warning if buildozer is run as root
+warn_on_root = 1
+
+# (bool) If True, use color terminal output
+buildozer_color = True
+
+# (str) Path to build artifact storage
+build_dir = .buildozer
+
+# (str) Path to build output
+bin_dir = ./bin
