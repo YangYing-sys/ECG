@@ -1,4 +1,4 @@
-name: Build ECG APK
+name: Build ECG APK——1
 
 on:
   workflow_dispatch:
@@ -40,6 +40,12 @@ jobs:
         run: |
           python -m pip install --upgrade pip setuptools wheel
           pip install buildozer cython==0.29.33
+
+      - name: Accept Android SDK licenses
+        run: |
+          mkdir -p $HOME/.android
+          touch $HOME/.android/repositories.cfg
+          yes | sdkmanager --licenses || true
 
       - name: Build with Buildozer
         run: |
