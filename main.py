@@ -18,11 +18,13 @@ from kivy.core.window import Window
 from kivy.utils import get_color_from_hex
 from kivy.utils import platform
 from kivy.uix.popup import Popup
+
 #-----csv-----
 import os
 import csv
-import time
 from datetime import datetime, timedelta
+from kivy.utils import platform
+from kivy.app import App
 
 class CSVDataManager:
     def __init__(self):
@@ -33,24 +35,24 @@ class CSVDataManager:
     def get_android_public_folder(self):
         """获取手机存储，将文件存放到手机的 ‘Download / 心电数据’ 文件夹内"""
         if platform == 'android':
-            # --- 【改动点 1：补齐安卓蓝牙与存储权限】 ---
-            from android.permissions import request_permissions, Permission
-            request_permissions([
-                Permission.WRITE_EXTERNAL_STORAGE,
-                Permission.READ_EXTERNAL_STORAGE,
-                Permission.BLUETOOTH,
-                Permission.BLUETOOTH_ADMIN,
-                Permission.ACCESS_FINE_LOCATION,
-                # 安卓12+ 强制所需的蓝牙权限
-                'android.permission.BLUETOOTH_CONNECT',
-                'android.permission.BLUETOOTH_SCAN'
-            ])
+            try:
+                from android.permissions import request_permissions, Permission
+                request_permissions([
+                    Permission.WRITE_EXTERNAL_STORAGE,
+                    Permission.READ_EXTERNAL_STORAGE
+                ])
+            except:
+                pass
 
-            # 使用 jnius 调用安卓底层 API 获取 Download 文件夹
-            from jnius import autoclass
-            Environment = autoclass('android.os.Environment')
-            base_path = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).getAbsolutePath()
-            folder_path = os.path.join(base_path, '心电数据记录')
+            try:
+                from jnius import autoclass
+                Environment = autoclass('android.os.Environment')
+                base_path = Environment.getExternalStoragePublicDirectory(
+                    Environment.DIRECTORY_DOWNLOADS
+                ).getAbsolutePath()
+                folder_path = os.path.join(base_path, '心电数据记录')
+            except:
+                folder_path = '/storage/emulated/0/Download/心电数据记录'
         else:
             # 如果在电脑上运行，就存在代码旁边的文件夹里
             folder_path = os.path.join(os.getcwd(), '心电数据记录')
@@ -85,7 +87,7 @@ class CSVDataManager:
             with open(filepath, mode='a', newline='', encoding='utf-8-sig') as f:
                 writer = csv.writer(f)
                 if not file_exists:
-                    # 写入表头 (utf-8-sig 保证 Excel 打开不会乱码！)
+                    # 写入表头
                     writer.writerow(['记录时间', '心率 (BPM)', 'RR波动差/HRV (ms)', '心律状态'])
 
                 time_str = datetime.now().strftime('%H:%M:%S')
@@ -99,18 +101,16 @@ class CSVDataManager:
             now = datetime.now()
             for filename in os.listdir(self.save_folder):
                 if filename.startswith("ECG_Log_") and filename.endswith(".csv"):
-                    # 从文件名中提取出日期 (比如 ECG_Log_2026-04-05.csv -> 2026-04-05)
                     date_str = filename.replace("ECG_Log_", "").replace(".csv", "")
                     try:
                         file_date = datetime.strptime(date_str, '%Y-%m-%d')
-                        # 如果文件的日期距离今天超过 7 天
                         if (now - file_date).days > 7:
                             file_to_del = os.path.join(self.save_folder, filename)
                             os.remove(file_to_del)
                             print(f"已清理过期文件: {filename}")
                     except ValueError:
                         pass
-        except Exception as e:
+        except Exception:
             pass
 
 # === 全局样式 ===
@@ -146,7 +146,8 @@ class RichLogBox(Label):
         self.text_size = (self.width - 30, self.height - 30)
 
 # ==========================================
-# 1. 强化版硬件线程 (解决延迟与乱码问题)
+# 1. 强化版硬件线程
+# 仅补安卓 HC-05 经典蓝牙，不动你的算法与UI
 # ==========================================
 class HardwareThread(threading.Thread):
     def __init__(self, data_callback, status_callback):
@@ -154,12 +155,146 @@ class HardwareThread(threading.Thread):
         self.data_callback = data_callback
         self.status_callback = status_callback
         self.running = True
+        self.daemon = True
 
     def run(self):
-        if platform == 'android':
-            self.run_bluetooth_mode()
-        else:
-            self.run_serial_mode()
+        try:
+            if platform == 'android':
+                self.run_bluetooth_mode()
+            else:
+                self.run_serial_mode()
+        except Exception as e:
+            self.status_callback(f"【链路中断】: {str(e)}")
+
+    # ===== 新增：安卓 HC-05 经典蓝牙模式 =====
+    def run_bluetooth_mode(self):
+        self.status_callback("【探测中】正在寻找已配对 HC-05 蓝牙链路...")
+
+        socket = None
+        try:
+            from jnius import autoclass
+
+            BluetoothAdapter = autoclass('android.bluetooth.BluetoothAdapter')
+            UUID = autoclass('java.util.UUID')
+            InputStreamReader = autoclass('java.io.InputStreamReader')
+            BufferedReader = autoclass('java.io.BufferedReader')
+
+            adapter = BluetoothAdapter.getDefaultAdapter()
+
+            if adapter is None:
+                self.status_callback("【错误】当前安卓设备不支持蓝牙")
+                return
+
+            if not adapter.isEnabled():
+                self.status_callback("【错误】蓝牙未开启，请先在系统设置中打开蓝牙")
+                return
+
+            # 经典蓝牙连接前，停止扫描可提升成功率
+            try:
+                if adapter.isDiscovering():
+                    adapter.cancelDiscovery()
+            except:
+                pass
+
+            # 获取已配对设备
+            try:
+                bonded = adapter.getBondedDevices()
+                paired_devices = bonded.toArray()
+            except Exception as e:
+                self.status_callback(f"【错误】读取已配对蓝牙设备失败: {str(e)}")
+                return
+
+            if not paired_devices or len(paired_devices) == 0:
+                self.status_callback("【错误】未发现已配对设备，请先去安卓蓝牙设置里配对 HC-05")
+                return
+
+            target_device = None
+            device_names = []
+
+            for device in paired_devices:
+                try:
+                    name = device.getName()
+                    if name:
+                        device_names.append(name)
+                        upper_name = name.upper()
+                        # 尽量兼容常见命名
+                        if (
+                            "HC-05" in upper_name or
+                            "HC05" in upper_name or
+                            "HC" in upper_name or
+                            "LINVOR" in upper_name or
+                            "BT" in upper_name
+                        ):
+                            target_device = device
+                            break
+                except:
+                    pass
+
+            if target_device is None:
+                self.status_callback(
+                    f"【错误】已配对设备中未找到 HC-05\n当前已配对设备: {device_names}"
+                )
+                return
+
+            self.status_callback(f"【蓝牙连接中】目标设备: {target_device.getName()}")
+
+            spp_uuid = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
+            last_err = None
+
+            # 先尝试安全连接
+            try:
+                socket = target_device.createRfcommSocketToServiceRecord(spp_uuid)
+                socket.connect()
+            except Exception as e:
+                last_err = e
+                try:
+                    if socket:
+                        socket.close()
+                except:
+                    pass
+                socket = None
+
+            # 再尝试不安全连接
+            if socket is None:
+                try:
+                    socket = target_device.createInsecureRfcommSocketToServiceRecord(spp_uuid)
+                    socket.connect()
+                except Exception as e:
+                    last_err = e
+                    try:
+                        if socket:
+                            socket.close()
+                    except:
+                        pass
+                    socket = None
+
+            if socket is None:
+                self.status_callback(f"【蓝牙连接失败】{str(last_err)}")
+                return
+
+            self.status_callback("【硬件握手成功】蓝牙链路已打通，开始接收波形数据...")
+
+            reader = BufferedReader(InputStreamReader(socket.getInputStream()))
+
+            while self.running:
+                try:
+                    line = reader.readLine()
+                    if line:
+                        line = str(line).strip()
+                        if line:
+                            self.parse_and_emit(line)
+                except Exception as e:
+                    self.status_callback(f"【链路中断】{str(e)}")
+                    break
+
+        except Exception as e:
+            self.status_callback(f"【安卓蓝牙异常】{str(e)}")
+        finally:
+            try:
+                if socket:
+                    socket.close()
+            except:
+                pass
 
     def run_serial_mode(self):
         self.status_callback("【探测中】正在寻找 USB 链路...")
@@ -170,13 +305,10 @@ class HardwareThread(threading.Thread):
 
         port_name = ports[0].device
         try:
-            # 提高串口读取的鲁棒性
             ser = serial.Serial(port_name, 115200, timeout=0.05)
-            # 开局先清空一次缓冲区
             ser.reset_input_buffer()
 
             while self.running:
-                # 贪婪读取机制：如果缓冲区堆积了太多数据，直接跳到最后
                 if ser.in_waiting > 500:
                     ser.reset_input_buffer()
 
@@ -191,68 +323,8 @@ class HardwareThread(threading.Thread):
         except Exception as e:
             self.status_callback(f"【链路中断】: {str(e)}")
 
-    # --- 【改动点 2：无缝植入安卓端的蓝牙调用 API】 ---
-    def run_bluetooth_mode(self):
-        self.status_callback("【蓝牙模式】系统已切换至低功耗蓝牙接收信道...")
-        try:
-            from jnius import autoclass, cast
-            BluetoothAdapter = autoclass('android.bluetooth.BluetoothAdapter')
-            UUID = autoclass('java.util.UUID')
-
-            adapter = BluetoothAdapter.getDefaultAdapter()
-            if adapter is None or not adapter.isEnabled():
-                self.status_callback("【未就绪】请先下拉状态栏，开启系统蓝牙后再重启APP。")
-                return
-
-            bonded_devices = adapter.getBondedDevices()
-            target_device = None
-            if bonded_devices is not None:
-                iterator = bonded_devices.iterator()
-                while iterator.hasNext():
-                    dev = cast('android.bluetooth.BluetoothDevice', iterator.next())
-                    # 按名字寻找 HC-05
-                    if dev.getName() == "HC-05":
-                        target_device = dev
-                        break
-
-            if target_device is None:
-                self.status_callback("【外围静默】未发现配对的 HC-05。\n注：请先去手机的系统设置里完成蓝牙配对！")
-                return
-
-            self.status_callback("【硬件寻址】正在唤醒并映射 HC-05 ...")
-            # SPP 串口协议经典 UUID
-            spp_uuid = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
-            socket = target_device.createRfcommSocketToServiceRecord(spp_uuid)
-            adapter.cancelDiscovery()
-            socket.connect()
-
-            self.bt_socket = socket
-            self.bt_input_stream = socket.getInputStream()
-            self.status_callback("【全链路导通】已接入外设流，监听 STM32 阵列帧...")
-
-            # 安卓环境下的按行分割机制
-            buffer = bytearray()
-            while self.running:
-                if self.bt_input_stream.available() > 0:
-                    data = self.bt_input_stream.read()
-                    if data != -1:
-                        buffer.append(data)
-                        if data == 10:  # 遇到 '\n' 表示一行结束
-                            line = buffer.decode('utf-8', errors='ignore').strip()
-                            buffer.clear()
-                            if line:
-                                self.parse_and_emit(line)
-                else:
-                    time.sleep(0.01)
-
-        except Exception as e:
-            self.status_callback(f"【无线信号受阻】通讯模块剥离: {str(e)}")
-        finally:
-            self.stop()
-
     def parse_and_emit(self, line):
         try:
-            # 1. 极其严格且容错的正则提取（完美兼容你的STM32含 '|' 的 printf 输出）
             m_ecg = re.search(r'ECG:([-+]?\d*\.?\d+)', line)
             m_bpm = re.search(r'BPM:(\d+)', line)
             m_hrv = re.search(r'HRV:(\d+)', line)
@@ -261,7 +333,6 @@ class HardwareThread(threading.Thread):
             bpm_val = int(m_bpm.group(1)) if m_bpm else 0
             hrv_val = int(m_hrv.group(1)) if m_hrv else 0
 
-            # 3. 实时状态判定
             rhythm_str = "Wait"
             if "Normal" in line:
                 rhythm_str = "Normal"
@@ -269,37 +340,24 @@ class HardwareThread(threading.Thread):
                 rhythm_str = "AFib"
             elif "PVC" in line:
                 rhythm_str = "PVC"
-            # --- 【改动点 3：让你的独立UI逻辑不出错地接纳脱落信号】 ---
-            elif "Lead-Off" in line:
-                rhythm_str = "Wait"  # 映射为 Wait，这样之前的UI算法不会崩溃报错
             elif "Wait" in line:
                 rhythm_str = "Wait"
 
-            # 4. 【同步推送机制】不再屏蔽 BPM=0 的数据
             self.data_callback(ecg_val, bpm_val, hrv_val, rhythm_str)
 
-            # 5. 只有真正有数值时才录入 CSV，防止日志被 Wait 刷屏
             if bpm_val > 0 and rhythm_str != "Wait":
                 app = App.get_running_app()
                 if hasattr(app, 'csv_manager'):
                     app.csv_manager.save_data(bpm_val, hrv_val, rhythm_str)
 
-        except Exception as e:
-            # 静默处理解析残缺行
+        except Exception:
             pass
 
     def stop(self):
         self.running = False
-        try:
-            if hasattr(self, 'bt_input_stream') and self.bt_input_stream:
-                self.bt_input_stream.close()
-            if hasattr(self, 'bt_socket') and self.bt_socket:
-                self.bt_socket.close()
-        except:
-            pass
 
 # ==========================================
-# 2. 精密 ECG 绘图 Widget (一字未改)
+# 2. 精密 ECG 绘图 Widget
 # ==========================================
 from kivy.uix.floatlayout import FloatLayout
 
@@ -388,21 +446,26 @@ class ECGPlotWidget(FloatLayout):
         self.baseline = self.baseline * 0.75 + value * 0.25
         clean_value = value - self.baseline
 
-        if not hasattr(self, 'last_smoothed'): self.last_smoothed = 0
+        if not hasattr(self, 'last_smoothed'):
+            self.last_smoothed = 0
         self.last_smoothed = self.last_smoothed * 0.85 + clean_value * 0.15
 
         final_value = self.last_smoothed * 1.8
 
-        if final_value > 80: final_value = 80
-        if final_value < -80: final_value = -80
+        if final_value > 80:
+            final_value = 80
+        if final_value < -80:
+            final_value = -80
 
         self.ecg_buffer[self.ptr] = final_value
         self.ptr = (self.ptr + 1) % self.data_len
 
     def render(self, dt):
-        if not hasattr(self, 'plot_rect'): return
+        if not hasattr(self, 'plot_rect'):
+            return
         plot_x, plot_y, plot_w, plot_h = self.plot_rect
-        if plot_w <= 0 or plot_h <= 0: return
+        if plot_w <= 0 or plot_h <= 0:
+            return
 
         points = []
         x_step = plot_w / (self.data_len - 1)
@@ -428,10 +491,27 @@ class ECGPlotWidget(FloatLayout):
         self.line.points = points
 
 # ==========================================
-# 3. 主应用 App (一字未改，完全采用你的UI与核心推演逻辑)
+# 3. 主应用 App
 # ==========================================
 class ECGApp(App):
     def build(self):
+        # ===== 新增：安卓运行时权限，仅补权限，不改UI =====
+        if platform == 'android':
+            try:
+                from android.permissions import request_permissions
+                request_permissions([
+                    'android.permission.BLUETOOTH',
+                    'android.permission.BLUETOOTH_ADMIN',
+                    'android.permission.BLUETOOTH_CONNECT',
+                    'android.permission.BLUETOOTH_SCAN',
+                    'android.permission.ACCESS_FINE_LOCATION',
+                    'android.permission.ACCESS_COARSE_LOCATION',
+                    'android.permission.READ_EXTERNAL_STORAGE',
+                    'android.permission.WRITE_EXTERNAL_STORAGE'
+                ])
+            except Exception as e:
+                print("权限申请失败:", e)
+
         self.title = "AI辅助心电预警系统 "
 
         self.current_bpm = 0
@@ -493,6 +573,7 @@ class ECGApp(App):
         Clock.schedule_interval(self.update_ui, 0.5)
         self.heart_anim_event = Clock.schedule_interval(self.animate_heart, 0.8)
 
+        # 保持你的原逻辑：启动即开线程
         self.hw_thread = HardwareThread(self.on_serial_data, self.update_conn_ui)
         self.hw_thread.start()
 
@@ -600,7 +681,8 @@ class ECGApp(App):
                 )
             return
 
-        if self.diag_status == 'DONE': return
+        if self.diag_status == 'DONE':
+            return
 
         if self.current_bpm > 180:
             self.advice_box.text = f"{E('⚠️')}【高杂波阻滞】捕捉到过激杂音源，数据进度挂起等待排空..."
@@ -616,7 +698,6 @@ class ECGApp(App):
             self.status_label.text = f"智能深部析出... {prog}%"
             return
 
-        # ★这里改回了 >= 3 次，防止硬件上的短暂误报
         afib = self.rhythm_history.count("AFib")
         pvc = self.rhythm_history.count("PVC")
 
@@ -668,7 +749,10 @@ class ECGApp(App):
         popup.open()
 
     def on_stop(self):
-        self.hw_thread.stop()
+        try:
+            self.hw_thread.stop()
+        except:
+            pass
 
 if __name__ == '__main__':
     ECGApp().run()
