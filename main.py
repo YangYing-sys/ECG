@@ -28,20 +28,10 @@ class CSVDataManager:
     def __init__(self):
         self.last_save_time = 0
         self.save_folder = self.get_android_public_folder()
-        self.clean_7days_old_files()  # 启动时清理7天前的垃圾文件
+        self.clean_7days_old_files()
 
     def get_android_public_folder(self):
-        """获取手机存储，将文件存放到手机的 ‘Download / 心电数据’ 文件夹内"""
         if platform == 'android':
-            try:
-                from android.permissions import request_permissions, Permission
-                request_permissions([
-                    Permission.WRITE_EXTERNAL_STORAGE,
-                    Permission.READ_EXTERNAL_STORAGE
-                ])
-            except:
-                pass
-
             try:
                 from jnius import autoclass
                 Environment = autoclass('android.os.Environment')
@@ -52,49 +42,35 @@ class CSVDataManager:
             except:
                 folder_path = '/storage/emulated/0/Download/心电数据记录'
         else:
-            # 如果在电脑上运行，就存在代码旁边的文件夹里
             folder_path = os.path.join(os.getcwd(), '心电数据记录')
 
-        # 如果文件夹不存在就创建
         if not os.path.exists(folder_path):
             os.makedirs(folder_path, exist_ok=True)
-
         return folder_path
 
     def get_today_filename(self):
-        """获取今天专属的 CSV 文件路径"""
         today_str = datetime.now().strftime('%Y-%m-%d')
         filename = f"ECG_Log_{today_str}.csv"
         return os.path.join(self.save_folder, filename)
 
     def save_data(self, bpm, hrv, rhythm):
-        """保存数据，依然做 5 秒限流保护手机运存"""
         current_time = time.time()
-        # 限流：如果是正常心律，每5秒存一次；如果是异常（AFib等），立刻存！
         if current_time - self.last_save_time < 5.0 and rhythm == "Normal":
             return
-
         self.last_save_time = current_time
         filepath = self.get_today_filename()
-
-        # 检查文件是否是新创建的，如果是就需要写表头
         file_exists = os.path.isfile(filepath)
-
         try:
-            # mode='a' 表示在文件末尾追加 (Append)
             with open(filepath, mode='a', newline='', encoding='utf-8-sig') as f:
                 writer = csv.writer(f)
                 if not file_exists:
-                    # 写入表头
                     writer.writerow(['记录时间', '心率 (BPM)', 'RR波动差/HRV (ms)', '心律状态'])
-
                 time_str = datetime.now().strftime('%H:%M:%S')
                 writer.writerow([time_str, bpm, hrv, rhythm])
-        except Exception as e:
-            print("CSV 保存失败:", e)
+        except Exception:
+            pass
 
     def clean_7days_old_files(self):
-        """扫描文件夹，删除 7 天前的文件"""
         try:
             now = datetime.now()
             for filename in os.listdir(self.save_folder):
@@ -103,9 +79,7 @@ class CSVDataManager:
                     try:
                         file_date = datetime.strptime(date_str, '%Y-%m-%d')
                         if (now - file_date).days > 7:
-                            file_to_del = os.path.join(self.save_folder, filename)
-                            os.remove(file_to_del)
-                            print(f"已清理过期文件: {filename}")
+                            os.remove(os.path.join(self.save_folder, filename))
                     except ValueError:
                         pass
         except Exception:
@@ -134,7 +108,6 @@ class RichLogBox(Label):
             self.bg = Rectangle(pos=self.pos, size=self.size)
             Color(0.8, 0.8, 0.8, 1)
             self.border = Line(rectangle=(self.x, self.y, self.width, self.height), width=1)
-
         self.bind(pos=self.update_bg, size=self.update_bg)
 
     def update_bg(self, *args):
@@ -144,7 +117,7 @@ class RichLogBox(Label):
         self.text_size = (self.width - 30, self.height - 30)
 
 # ==========================================
-# 1. 强化版硬件线程 (包含安卓蓝牙修补)
+# 1. 硬件线程 (已加入无限断线重连不死机制)
 # ==========================================
 class HardwareThread(threading.Thread):
     def __init__(self, data_callback, status_callback):
@@ -161,131 +134,82 @@ class HardwareThread(threading.Thread):
             else:
                 self.run_serial_mode()
         except Exception as e:
-            self.status_callback(f"【链路中断】: {str(e)}")
+            self.status_callback(f"【链路大崩溃】: {str(e)}")
 
     def run_bluetooth_mode(self):
-        self.status_callback("【探测中】正在寻找已配对 HC-05 蓝牙链路...")
-
-        socket = None
-        try:
-            from jnius import autoclass
-
-            BluetoothAdapter = autoclass('android.bluetooth.BluetoothAdapter')
-            UUID = autoclass('java.util.UUID')
-            InputStreamReader = autoclass('java.io.InputStreamReader')
-            BufferedReader = autoclass('java.io.BufferedReader')
-
-            adapter = BluetoothAdapter.getDefaultAdapter()
-
-            if adapter is None:
-                self.status_callback("【错误】当前安卓设备不支持蓝牙")
-                return
-
-            if not adapter.isEnabled():
-                self.status_callback("【错误】蓝牙未开启，请先在系统设置中打开蓝牙")
-                return
-
+        import time
+        from jnius import autoclass
+        
+        # 【断点重试大循环】就算断线了也不会死，等5秒就重试
+        while self.running:
+            self.status_callback("【探测中】正在寻找并连接已配对的 HC-05...\n(如果有系统弹窗，请务必点击允许权限！)")
+            socket = None
             try:
-                if adapter.isDiscovering():
-                    adapter.cancelDiscovery()
-            except:
-                pass
+                BluetoothAdapter = autoclass('android.bluetooth.BluetoothAdapter')
+                UUID = autoclass('java.util.UUID')
+                InputStreamReader = autoclass('java.io.InputStreamReader')
+                BufferedReader = autoclass('java.io.BufferedReader')
 
-            try:
-                bonded = adapter.getBondedDevices()
-                paired_devices = bonded.toArray()
-            except Exception as e:
-                self.status_callback(f"【错误】读取已配对蓝牙设备失败: {str(e)}")
-                return
+                adapter = BluetoothAdapter.getDefaultAdapter()
 
-            if not paired_devices or len(paired_devices) == 0:
-                self.status_callback("【错误】未发现已配对设备，请先去安卓蓝牙设置里配对 HC-05")
-                return
+                if adapter is None or not adapter.isEnabled():
+                    self.status_callback("【错误】检测到手机未打开蓝牙\n请打开蓝牙后，系统将在5秒后自动重连...")
+                    time.sleep(5)
+                    continue
 
-            target_device = None
-            device_names = []
-
-            for device in paired_devices:
                 try:
-                    name = device.getName()
-                    if name:
-                        device_names.append(name)
-                        upper_name = name.upper()
-                        if (
-                            "HC-05" in upper_name or
-                            "HC05" in upper_name or
-                            "HC" in upper_name or
-                            "LINVOR" in upper_name or
-                            "BT" in upper_name
-                        ):
-                            target_device = device
-                            break
+                    if adapter.isDiscovering():
+                        adapter.cancelDiscovery()
                 except:
                     pass
 
-            if target_device is None:
-                self.status_callback(
-                    f"【错误】已配对设备中未找到 HC-05\n当前已配对设备: {device_names}"
-                )
-                return
+                paired_devices = adapter.getBondedDevices().toArray()
+                if not paired_devices:
+                    self.status_callback("【错误】空空如也！未发现任何已配对设备\n请切出APP，去设置里配对 HC-05。5秒后重试...")
+                    time.sleep(5)
+                    continue
 
-            self.status_callback(f"【蓝牙连接中】目标设备: {target_device.getName()}")
+                target_device = None
+                for device in paired_devices:
+                    name = str(device.getName()).upper()
+                    if "HC-05" in name or "HC05" in name or "HC" in name or "LINVOR" in name or "BT" in name:
+                        target_device = device
+                        break
 
-            spp_uuid = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
-            last_err = None
+                if not target_device:
+                    self.status_callback("【错误】已有配对设备中没找到HC-05，请去系统蓝牙里确认。5秒后重试...")
+                    time.sleep(5)
+                    continue
 
-            try:
-                socket = target_device.createRfcommSocketToServiceRecord(spp_uuid)
-                socket.connect()
-            except Exception as e:
-                last_err = e
+                spp_uuid = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
                 try:
-                    if socket:
-                        socket.close()
-                except:
-                    pass
-                socket = None
-
-            if socket is None:
-                try:
+                    socket = target_device.createRfcommSocketToServiceRecord(spp_uuid)
+                    socket.connect()
+                except Exception:
+                    if socket: socket.close()
                     socket = target_device.createInsecureRfcommSocketToServiceRecord(spp_uuid)
                     socket.connect()
-                except Exception as e:
-                    last_err = e
-                    try:
-                        if socket:
-                            socket.close()
-                    except:
-                        pass
-                    socket = None
 
-            if socket is None:
-                self.status_callback(f"【蓝牙连接失败】{str(last_err)}\n(请确认模块是否通电，或重启模块重配对)")
-                return
+                self.status_callback(f"【成功】蓝牙链路已打通 ({target_device.getName()})，开始接收波形！")
+                reader = BufferedReader(InputStreamReader(socket.getInputStream()))
 
-            self.status_callback("【硬件握手成功】蓝牙链路已打通，开始接收波形数据...")
-
-            reader = BufferedReader(InputStreamReader(socket.getInputStream()))
-
-            while self.running:
-                try:
+                # 只要连接建立，就一直在内部循环读取
+                while self.running:
                     line = reader.readLine()
                     if line:
                         line = str(line).strip()
-                        if line:
-                            self.parse_and_emit(line)
-                except Exception as e:
-                    self.status_callback(f"【链路中断】{str(e)}")
-                    break
+                        if line: self.parse_and_emit(line)
 
-        except Exception as e:
-            self.status_callback(f"【安卓蓝牙异常】{str(e)}\n可能是缺少蓝牙/附近设备权限")
-        finally:
-            try:
-                if socket:
-                    socket.close()
-            except:
-                pass
+            except Exception as e:
+                self.status_callback(f"【安卓蓝牙请求被系统拒绝】: {str(e)}\n\n(可能需要你去系统设置给这APP开「附近设备」和「定位」权限，5秒后再次尝试连接...)")
+            finally:
+                try:
+                    if socket: socket.close()
+                except: pass
+            
+            # 每次循环失败，休息5秒再重新冲击
+            if self.running:
+                time.sleep(5)
 
     def run_serial_mode(self):
         self.status_callback("【探测中】正在寻找 USB 链路...")
@@ -302,15 +226,12 @@ class HardwareThread(threading.Thread):
             while self.running:
                 if ser.in_waiting > 500:
                     ser.reset_input_buffer()
-
                 line_bytes = ser.readline()
                 if line_bytes:
                     try:
                         line = line_bytes.decode('utf-8', errors='ignore').strip()
-                        if line:
-                            self.parse_and_emit(line)
-                    except:
-                        continue
+                        if line: self.parse_and_emit(line)
+                    except: continue
         except Exception as e:
             self.status_callback(f"【链路中断】: {str(e)}")
 
@@ -325,14 +246,9 @@ class HardwareThread(threading.Thread):
             hrv_val = int(m_hrv.group(1)) if m_hrv else 0
 
             rhythm_str = "Wait"
-            if "Normal" in line:
-                rhythm_str = "Normal"
-            elif "AFib" in line:
-                rhythm_str = "AFib"
-            elif "PVC" in line:
-                rhythm_str = "PVC"
-            elif "Wait" in line:
-                rhythm_str = "Wait"
+            if "Normal" in line: rhythm_str = "Normal"
+            elif "AFib" in line: rhythm_str = "AFib"
+            elif "PVC" in line: rhythm_str = "PVC"
 
             self.data_callback(ecg_val, bpm_val, hrv_val, rhythm_str)
 
@@ -340,18 +256,13 @@ class HardwareThread(threading.Thread):
                 app = App.get_running_app()
                 if hasattr(app, 'csv_manager'):
                     app.csv_manager.save_data(bpm_val, hrv_val, rhythm_str)
-
         except Exception:
             pass
 
     def stop(self):
         self.running = False
 
-# ==========================================
-# 2. 精密 ECG 绘图 Widget
-# ==========================================
 from kivy.uix.floatlayout import FloatLayout
-
 class ECGPlotWidget(FloatLayout):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -359,21 +270,15 @@ class ECGPlotWidget(FloatLayout):
         self.ecg_buffer = np.zeros(self.data_len)
         self.ptr = 0
         self.display_mode = 'FLAT'
-
         self.baseline = 0.0
-        self.smooth_window = []
-        self.window_size = 15
-
         with self.canvas.before:
             Color(1, 1, 1, 1)
             self.bg = Rectangle()
             self.grid_lines = InstructionGroup()
             self.canvas.before.add(self.grid_lines)
-
         with self.canvas:
             Color(*get_color_from_hex('#e74c3c'))
             self.line = Line(points=[], width=1.2)
-
         self.bind(pos=self.update_canvas, size=self.update_canvas)
 
         self.y_labels = []
@@ -389,20 +294,14 @@ class ECGPlotWidget(FloatLayout):
                         font_size='12sp', size_hint=(None, None), size=(40, 20))
             self.add_widget(lbl)
             self.x_labels.append((lbl, x_val))
-
         Clock.schedule_interval(self.render, 1.0 / 60.0)
 
     def update_canvas(self, *args):
-        pad_left = 40
-        pad_bottom = 25
-        pad_right = 10
-        pad_top = 10
-
+        pad_left, pad_bottom, pad_right, pad_top = 40, 25, 10, 10
         plot_x = self.x + pad_left
         plot_y = self.y + pad_bottom
         plot_w = self.width - pad_left - pad_right
         plot_h = self.height - pad_bottom - pad_top
-
         self.bg.pos = (plot_x, plot_y)
         self.bg.size = (plot_w, plot_h)
         self.grid_lines.clear()
@@ -412,7 +311,6 @@ class ECGPlotWidget(FloatLayout):
             norm_y = (y_val + 60) / y_range
             y_pos = plot_y + norm_y * plot_h
             lbl.pos = (self.x, y_pos - lbl.height / 2)
-
             if y_val == 0:
                 self.grid_lines.add(Color(0.85, 0.85, 0.85, 1))
                 self.grid_lines.add(Line(points=[plot_x, y_pos, plot_x + plot_w, y_pos], width=1.2))
@@ -424,11 +322,9 @@ class ECGPlotWidget(FloatLayout):
         for lbl, x_val in self.x_labels:
             norm_x = x_val / x_range
             x_pos = plot_x + norm_x * plot_w
-
             lbl.pos = (x_pos - lbl.width / 2, self.y)
             self.grid_lines.add(Color(0.94, 0.94, 0.94, 1))
             self.grid_lines.add(Line(points=[x_pos, plot_y, x_pos, plot_y + plot_h], width=1))
-
         self.grid_lines.add(Color(0.8, 0.8, 0.8, 1))
         self.grid_lines.add(Line(rectangle=(plot_x, plot_y, plot_w, plot_h), width=1))
         self.plot_rect = (plot_x, plot_y, plot_w, plot_h)
@@ -436,16 +332,11 @@ class ECGPlotWidget(FloatLayout):
     def push_data(self, value):
         self.baseline = self.baseline * 0.75 + value * 0.25
         clean_value = value - self.baseline
-
-        if not hasattr(self, 'last_smoothed'):
-            self.last_smoothed = 0
+        if not hasattr(self, 'last_smoothed'): self.last_smoothed = 0
         self.last_smoothed = self.last_smoothed * 0.85 + clean_value * 0.15
-
         final_value = self.last_smoothed * 1.8
-
         if final_value > 80: final_value = 80
         if final_value < -80: final_value = -80
-
         self.ecg_buffer[self.ptr] = final_value
         self.ptr = (self.ptr + 1) % self.data_len
 
@@ -453,10 +344,8 @@ class ECGPlotWidget(FloatLayout):
         if not hasattr(self, 'plot_rect'): return
         plot_x, plot_y, plot_w, plot_h = self.plot_rect
         if plot_w <= 0 or plot_h <= 0: return
-
         points = []
         x_step = plot_w / (self.data_len - 1)
-
         y_min, y_max = -60.0, 60.0
         y_range = y_max - y_min
 
@@ -467,14 +356,9 @@ class ECGPlotWidget(FloatLayout):
         else:
             for i in range(self.data_len):
                 idx = (self.ptr + i) % self.data_len
-                val = self.ecg_buffer[idx]
-                val = max(y_min, min(y_max, val))
-
+                val = max(y_min, min(y_max, self.ecg_buffer[idx]))
                 norm_y = (val - y_min) / y_range
-                y = plot_y + norm_y * plot_h
-                x = plot_x + i * x_step
-                points.extend([x, y])
-
+                points.extend([plot_x + i * x_step, plot_y + norm_y * plot_h])
         self.line.points = points
 
 # ==========================================
@@ -482,6 +366,7 @@ class ECGPlotWidget(FloatLayout):
 # ==========================================
 class ECGApp(App):
     def build(self):
+        # ★【关键修复】在这里动态提权，不管结果，把界面先搭起来
         if platform == 'android':
             try:
                 from android.permissions import request_permissions
@@ -549,16 +434,17 @@ class ECGApp(App):
         root.add_widget(self.graph)
 
         self.advice_box = RichLogBox(size_hint_y=0.25)
-        self.advice_box.text = f"{E('💡')} 系统核心引擎启动，连接协议寻址中...\n(注：请确保单片机电极片已可靠粘连皮肤)"
+        self.advice_box.text = f"{E('💡')} 系统核心引擎就绪，正在准备连接..."
         root.add_widget(self.advice_box)
 
         Clock.schedule_interval(self.update_ui, 0.5)
         self.heart_anim_event = Clock.schedule_interval(self.animate_heart, 0.8)
 
-        self.hw_thread = HardwareThread(self.on_serial_data, self.update_conn_ui)
-        self.hw_thread.start()
-
         self.csv_manager = CSVDataManager()
+
+        # ★【重大杀手锏修复】延迟 3.5 秒启动蓝牙探查，给足你点击弹窗“允许权限”的时间！
+        self.hw_thread = HardwareThread(self.on_serial_data, self.update_conn_ui)
+        Clock.schedule_once(lambda dt: self.hw_thread.start(), 3.5)
 
         return root
 
@@ -594,6 +480,7 @@ class ECGApp(App):
         self.heart_label.font_size = 40
         self.heart_label.color = get_color_from_hex('#e74c3c')
 
+    # 注意：在底部文本框没提示【接收波形中...】之前，不要手快点这个按钮！不然会抢占底部信息的展示
     def start_manual_diagnosis(self, instance):
         self.diag_status = 'PREPARING'
         self.prep_countdown = 6
@@ -614,7 +501,7 @@ class ECGApp(App):
 
     def update_ui(self, dt):
         now_time = time.time()
-        is_disconnected = (now_time - self.last_valid_data_time) > 1.5
+        is_disconnected = (now_time - self.last_valid_data_time) > 2.0
 
         if self.diag_status == 'IDLE':
             self.bpm_label.text = "--"
@@ -630,15 +517,14 @@ class ECGApp(App):
             if self.diag_status in ['PREPARING', 'RUNNING']:
                 self.advice_box.text = (
                     f"{E('⚠️')}【检测中断警告：链路静默】\n"
-                    "未侦测到实时硬件波形！请确认：\n"
-                    "1. 连接线是否插稳，COM通讯端是否被占用。\n"
-                    "2. 传感器导联金属片是否完全贴紧肌肤导电。\n"
-                    "3. 蓝牙是否突然断开（如是，退出APP重进）。"
+                    "未收到硬件波形，你的下述问题可能发生：\n"
+                    "1. 蓝牙未能顺利连接（请耐心等待5秒一轮的自动重连）。\n"
+                    "2. 传感器导联金属片松动了。"
                 )
                 self.diag_status = 'IDLE'
                 self.btn_diag.disabled = False
-                self.btn_diag.text = "重置以重新连接"
-                self.status_label.text = "状态: 失去硬件连接响应"
+                self.btn_diag.text = "复位并重新开始"
+                self.status_label.text = "状态: 失去硬件连接"
                 self.status_label.color = get_color_from_hex('#e74c3c')
             return
         else:
@@ -666,7 +552,7 @@ class ECGApp(App):
             return
 
         if self.current_bpm > 180:
-            self.advice_box.text = f"{E('⚠️')}【高杂波阻滞】捕捉到过激杂音源，数据进度挂起等待排空..."
+            self.advice_box.text = f"{E('⚠️')}【高杂波阻滞】捕捉到过激杂音源，数据挂起..."
             self.valid_data_ticks = max(0, self.valid_data_ticks - 1)
             return
 
@@ -685,30 +571,26 @@ class ECGApp(App):
         if afib >= 3:
             self.status_label.text = "诊断结果: 疑似房颤 (AFib)"
             self.status_label.color = get_color_from_hex('#c0392b')
-            self.advice_box.text = f"{E('❌')} 【结论快照】捕捉到严重不规律的RR间期序列，强烈疑似心房颤动！"
-            self.show_alert_popup("⚠️ 高危心电异常预警",
-                                  "系统检测到连续的不规则 RR 间期（疑似房颤），\n请立刻持设备就诊查验！")
-
+            self.advice_box.text = f"{E('❌')} 【结论快照】强烈疑似心房颤动！请就医！"
+            self.show_alert_popup("⚠️ 高危心电异常预警", "连续不规则 RR 间期，疑似房颤！")
         elif pvc >= 3:
             self.status_label.text = "诊断结果: 室性早搏 (PVC)"
             self.status_label.color = get_color_from_hex('#d35400')
-            self.advice_box.text = f"{E('⚠️')} 【结论快照】捕捉到部分导联的代偿间歇偏移，疑似室性期前收缩(PVC)。"
-            self.show_alert_popup("⚠️ 注意: 节律异常",
-                                  "捕捉到提前漏跳的代偿间歇（早搏），\n偶尔发生属正常现象，若频繁出现请注意休息。")
-
+            self.advice_box.text = f"{E('⚠️')} 【结论快照】捕捉到室性期前收缩(PVC)早搏。"
+            self.show_alert_popup("⚠️ 注意: 节律异常", "捕捉到早搏信号，请注意休息。")
         else:
             self.status_label.text = "诊断结果: 正常心律"
             self.status_label.color = get_color_from_hex('#27ae60')
-            self.advice_box.text = f"{E('✅')} 【结论快照】心房心室起搏平稳健康，周期排查完毕，系统解锁进入恒向守护。"
+            self.advice_box.text = f"{E('✅')} 【结论快照】心房心室起搏平稳健康，周期排查完毕。"
 
         self.diag_status = 'DONE'
         self.btn_diag.disabled = False
-        self.btn_diag.text = "复位并开启全新捕获"
+        self.btn_diag.text = "复位开启全新捕获"
 
     def trigger_sms_alert(self, msg):
         now = time.time()
         if now - self.last_sms_time > 30:
-            self.advice_box.text += f"\n\n{E('🔔')} 【系统分发】异常心动信号已通过后台基站通报管理端。"
+            self.advice_box.text += f"\n\n{E('🔔')} 【系统分发】异常心动信号已通报管理端。"
             self.last_sms_time = now
 
     def show_alert_popup(self, title_text, msg_text):
@@ -716,16 +598,12 @@ class ECGApp(App):
         lbl = Label(text=msg_text, font_name=FONT_NAME, font_size='18sp',
                     color=(1, 1, 1, 1), halign='center', valign='middle')
         lbl.bind(size=lbl.setter('text_size'))
-
-        btn = Button(text="确认并关闭", size_hint_y=0.4, font_name=FONT_NAME,
+        btn = Button(text="确认关闭", size_hint_y=0.4, font_name=FONT_NAME,
                      font_size='18sp', bold=True, background_color=get_color_from_hex('#e74c3c'))
-
         box.add_widget(lbl)
         box.add_widget(btn)
-
         popup = Popup(title=title_text, content=box, size_hint=(0.7, 0.4),
-                      title_font=FONT_NAME, title_color=(1, 0.2, 0.2, 1),
-                      auto_dismiss=False)
+                      title_font=FONT_NAME, title_color=(1, 0.2, 0.2, 1), auto_dismiss=False)
         btn.bind(on_press=popup.dismiss)
         popup.open()
 
