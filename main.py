@@ -21,10 +21,8 @@ from kivy.uix.popup import Popup
 # -----csv-----
 import os
 import csv
-import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from kivy.utils import platform
-from kivy.app import App
 
 
 class CSVDataManager:
@@ -200,7 +198,7 @@ class HardwareThread(threading.Thread):
                 istream = socket.getInputStream()
 
                 while self.running:
-                    # 严格按照你 C 语言发出的 8 字节二进制包解析
+                    # 严格按照 C 语言发出的 8 字节二进制包解析
                     if istream.read() == 0xAA:  # 帧头1
                         if istream.read() == 0x55:  # 帧头2
                             # 连续读取后续 6 字节
@@ -259,7 +257,7 @@ class HardwareThread(threading.Thread):
                 time.sleep(2)
 
     def process_and_emit(self, adc, bpm, hrv, status_code):
-        # 1. 状态映射 (完美贴合你的 UI 判断逻辑)
+        # 1. 状态映射 (完美贴合 UI 判断逻辑)
         status_map = {
             0: "Wait",  # 导联脱落
             1: "Wait",  # 计算中
@@ -272,10 +270,10 @@ class HardwareThread(threading.Thread):
         # 2. 将 ADC(0-4095) 处理为 UI 原本识别的震荡幅度浮点数
         ecg_val = (adc - 2048.0) / 10.0
 
-        # 3. 实时推送给你原汁原味的 UI
+        # 3. 实时推送给 UI
         self.data_callback(ecg_val, bpm, hrv, rhythm_str)
 
-        # 4. 存入你的 CSV 管理器
+        # 4. 存入 CSV 管理器
         if bpm > 0 and rhythm_str != "Wait":
             app = App.get_running_app()
             if hasattr(app, 'csv_manager'):
@@ -286,7 +284,7 @@ class HardwareThread(threading.Thread):
 
 
 # ==========================================
-# 2. 精密 ECG 绘图 Widget (原封不动！)
+# 2. 精密 ECG 绘图 Widget
 # ==========================================
 from kivy.uix.floatlayout import FloatLayout
 
@@ -374,18 +372,14 @@ class ECGPlotWidget(FloatLayout):
 
     def push_data(self, value):
         # 1. 【极速基线回正】 (把 0.05 改成 0.25，提高 5 倍回正速度！)
-        # 这样当你人一动，波形即便乱飞，也会在 0.1 秒内“嗖”地一下回到正中央。
         self.baseline = self.baseline * 0.75 + value * 0.25
         clean_value = value - self.baseline
 
         # 2. 【智能抗噪低通滤网】 (增大旧数据权重到 0.85)
-        # 这会像抹了磨皮滤镜一样，把那些锯齿状的毛刺“烫平”。
         if not hasattr(self, 'last_smoothed'): self.last_smoothed = 0
         self.last_smoothed = self.last_smoothed * 0.85 + clean_value * 0.15
 
         # 3. 【防削峰动态倍率】
-        # 看你的图，信号已经爆表了。我们要把倍率降下来，建议 1.5 ~ 2.0。
-        # 只要波形不顶到 60 轴，你就永远不会觉得它“不动了”。
         final_value = self.last_smoothed * 1.8
 
         # 4. 【溢出保护】 防止极端移动导致界面崩溃
@@ -425,7 +419,7 @@ class ECGPlotWidget(FloatLayout):
 
 
 # ==========================================
-# 3. 主应用 App (原封不动！)
+# 3. 主应用 App
 # ==========================================
 class ECGApp(App):
     def build(self):
@@ -433,7 +427,8 @@ class ECGApp(App):
 
         self.current_bpm = 0
         self.current_hrv = 0
-        self.current_rhythm = "Normal"
+        # 【修复1】默认设定为 Wait，绝不盲目乐观预判为正常
+        self.current_rhythm = "Wait"
         self.diag_status = 'IDLE'
         self.prep_countdown = 0
         self.valid_data_ticks = 0
@@ -502,13 +497,15 @@ class ECGApp(App):
 
     def on_serial_data(self, ecg_val, bpm_val, hrv_val, rhythm_str):
         self.last_valid_data_time = time.time()
-
         self.graph.push_data(ecg_val)
-        if bpm_val > 0:
+
+        # 【修复2】如果是脱落或者测不出心率，强制压制状态，绝不沿用以前状态
+        if rhythm_str == "Wait" or bpm_val == 0:
+            self.current_rhythm = "Wait"
+        else:
             self.current_bpm = bpm_val
             self.current_hrv = hrv_val
-            if rhythm_str != "Wait":
-                self.current_rhythm = rhythm_str
+            self.current_rhythm = rhythm_str
 
         if self.diag_status != 'IDLE':
             self.graph.display_mode = 'WAVE'
@@ -567,7 +564,7 @@ class ECGApp(App):
                 self.advice_box.text = (
                     f"{E('⚠️')}【检测中断警告：链路静默】\n"
                     "未侦测到实时硬件波形！请确认：\n"
-                    "1. 连接线是否插稳，COM通讯端是否被其他程序干死占用。\n"
+                    "1. 蓝牙连接或COM通讯端是否正常工作。\n"
                     "2. 传感器导联金属片是否完全贴紧肌肤导电。"
                 )
                 self.diag_status = 'IDLE'
@@ -604,6 +601,11 @@ class ECGApp(App):
             self.valid_data_ticks = max(0, self.valid_data_ticks - 1)
             return
 
+        # 【修复3】极度关键：检测不到有效心跳时，卡死进度条！防止收集10次虚假的数值当成健康！
+        if self.current_bpm == 0 or self.current_rhythm == "Wait":
+            self.advice_box.text = f"{E('⚠️')}【等候心动周期】未捕获到有效心跳搏动，检测进度已挂起..."
+            return
+
         self.valid_data_ticks += 0.5
         if int(self.valid_data_ticks) > len(self.rhythm_history):
             self.rhythm_history.append(self.current_rhythm)
@@ -613,7 +615,6 @@ class ECGApp(App):
             self.status_label.text = f"智能深部析出... {prog}%"
             return
 
-        # ★这里改回了 >= 3 次，防止硬件上的短暂误报
         afib = self.rhythm_history.count("AFib")
         pvc = self.rhythm_history.count("PVC")
 
