@@ -1,48 +1,64 @@
 [app]
-title = ECG App
-package.name = ecgapp
-package.domain = org.yangying
+# (str) Title of your application
+title = AI心电预警系统
+
+# (str) Package name
+package.name = aiecg_matepad
+
+# (str) Package domain (needed for android packaging)
+package.domain = org.health.care
+
+# (str) Source code where the main.py live
 source.dir = .
-source.include_exts = py,png,jpg,kv,atlas,ttf,csv
-source.include_patterns = assets/*,images/*,fonts/*
-source.exclude_exts = spec
-source.exclude_dirs = tests, bin, venv, .git, __pycache__
-source.exclude_patterns = *.pyc,*.pyo,*.git/*
-version = 1.0
 
-# Critical: Needed to fix the build errors
-requirements = python3,kivy,numpy,pyjnius,pyserial
+# (list) Source files to include (包含字体文件后缀)
+source.include_exts = py,png,jpg,kv,atlas,ttf
 
+# (list) Application requirements
+# 注意：一定要包含 pyjnius (调用安卓接口) 和 numpy (算法支持)
+requirements = python3,kivy,numpy,pyserial,pyjnius,android
+
+# (str) Custom source folders for requirements
+# requirements.source.kivy = ../kivy
+
+# (list) Garden requirements
+#garden_requirements =
+
+# (list) Permissions (安卓权限申请)
+# 针对蓝牙 HC-05 和 文件保存，必须包含以下权限
+android.permissions = BLUETOOTH_SCAN, BLUETOOTH_CONNECT, ACCESS_FINE_LOCATION, WRITE_EXTERNAL_STORAGE, READ_EXTERNAL_STORAGE, INTERNET
+
+# (int) Target Android API, should be as high as possible.
+android.api = 33
+
+# (int) Minimum API your APK will support.
+android.minapi = 21
+
+# (list) The Android architectures to build for.
+# 华为 MatePad Pro 11 建议选 arm64-v8a，为了兼容性可加上 armeabi-v7a
+android.archs = arm64-v8a, armeabi-v7a
+
+# (bool) indicates whether the screen should stay on
+# 运行心电监测时建议屏幕常亮
+android.meta_data = {"android.permission.WAKE_LOCK": "True"}
+
+# (str) Supported orientation (landscape, portrait or all)
+# 平板端建议竖屏显示波形效果更好
 orientation = portrait
-fullscreen = 0
+
+# (bool) Copy library instead of making a libpython.so
+android.copy_libs = 1
+
+# (list) List of inclusion filters for assets
+# 注意这里增加了 ttf 确保你代码里的字体能被一起打包
+source.include_patterns = assets/*,*.ttf
+
+# (str) Log level (0 = error only, 1 = info, 2 = debug (with command output))
+log_level = 2
+
+# (str) Android entry point
+python_for_android.entrypoint = main.py
 
 [buildozer]
+# (int) log level (0 = error only, 1 = info, 2 = debug)
 log_level = 2
-warn_on_root = 1
-buildozer_color = 1 
-
-[app:android]
-android.fullscreen = 0
-android.entrypoint = org.kivy.android.PythonActivity
-
-# Critical: Needed for HC-05 Classic Bluetooth to work in Android 12+
-android.permissions = BLUETOOTH,BLUETOOTH_ADMIN,BLUETOOTH_CONNECT,BLUETOOTH_SCAN,ACCESS_FINE_LOCATION,ACCESS_COARSE_LOCATION,READ_EXTERNAL_STORAGE,WRITE_EXTERNAL_STORAGE
-
-# Stable parameters for compilation (Removed the deprecated android.sdk variable)
-android.api = 31
-android.minapi = 21
-android.ndk = 25b
-android.ndk_api = 21
-android.archs = arm64-v8a, armeabi-v7a
-android.enable_androidx = True
-
-android.logcat_filters = *:S python:D
-android.copy_libs = 1
-android.allow_backup = True
-android.release_artifact = apk
-android.hardware_accelerated = True
-android.enable_aapt2 = False
-
-[app:p4a]
-p4a.fork = kivy
-p4a.branch = master
