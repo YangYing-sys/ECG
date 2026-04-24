@@ -1,120 +1,90 @@
-import sys
+import os, csv, re, time, threading, uuid
+from datetime import datetime
+from collections import deque, Counter
+
 import numpy as np
-import re
-import time
-import threading
-import serial
-import serial.tools.list_ports
-from collections import deque
+import serial, serial.tools.list_ports
 
 from kivy.app import App
-from kivy.uix.boxlayout import BoxLayout
-from kivy.uix.label import Label
-from kivy.uix.button import Button
-from kivy.uix.widget import Widget
-from kivy.graphics import Line, Color, Rectangle, InstructionGroup
 from kivy.clock import Clock
 from kivy.core.window import Window
-from kivy.utils import get_color_from_hex
-from kivy.utils import platform
+from kivy.graphics import Line, Color, Rectangle, InstructionGroup
+from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.floatlayout import FloatLayout
+from kivy.uix.label import Label
+from kivy.uix.button import Button
 from kivy.uix.popup import Popup
-# -----csv-----
-import os
-import csv
-from datetime import datetime
-from kivy.utils import platform
+from kivy.utils import get_color_from_hex, platform
 
-
-class CSVDataManager:
-    def __init__(self):
-        self.last_save_time = 0
-        self.save_folder = self.get_android_public_folder()
-        self.clean_7days_old_files()  # 启动时清理7天前的垃圾文件
-
-    def get_android_public_folder(self):
-        """获取手机存储，将文件存放到手机的 ‘Download / 心电数据’ 文件夹内"""
-        if platform == 'android':
-            # 请求安卓读写权限
-            from android.permissions import request_permissions, Permission
-            request_permissions([Permission.WRITE_EXTERNAL_STORAGE, Permission.READ_EXTERNAL_STORAGE])
-
-            # 使用 jnius 调用安卓底层 API 获取 Download 文件夹
-            from jnius import autoclass
-            Environment = autoclass('android.os.Environment')
-            base_path = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).getAbsolutePath()
-            folder_path = os.path.join(base_path, '心电数据记录')
-        else:
-            # 如果在电脑上运行，就存在代码旁边的文件夹里
-            folder_path = os.path.join(os.getcwd(), '心电数据记录')
-
-        # 如果文件夹不存在就创建
-        if not os.path.exists(folder_path):
-            os.makedirs(folder_path, exist_ok=True)
-
-        return folder_path
-
-    def get_today_filename(self):
-        """获取今天专属的 CSV 文件路径"""
-        today_str = datetime.now().strftime('%Y-%m-%d')
-        filename = f"ECG_Log_{today_str}.csv"
-        return os.path.join(self.save_folder, filename)
-
-    def save_data(self, bpm, hrv, rhythm):
-        """保存数据，依然做 5 秒限流保护手机运存"""
-        current_time = time.time()
-        # 限流：如果是正常心律，每5秒存一次；如果是异常（AFib等），立刻存！
-        if current_time - self.last_save_time < 5.0 and rhythm == "Normal":
-            return
-
-        self.last_save_time = current_time
-        filepath = self.get_today_filename()
-
-        # 检查文件是否是新创建的，如果是就需要写表头
-        file_exists = os.path.isfile(filepath)
-
-        try:
-            # mode='a' 表示在文件末尾追加 (Append)
-            with open(filepath, mode='a', newline='', encoding='utf-8-sig') as f:
-                writer = csv.writer(f)
-                if not file_exists:
-                    # 写入表头 (utf-8-sig 保证 Excel 打开不会乱码！)
-                    writer.writerow(['记录时间', '心率 (BPM)', 'RR波动差/HRV (ms)', '心律状态'])
-
-                time_str = datetime.now().strftime('%H:%M:%S')
-                writer.writerow([time_str, bpm, hrv, rhythm])
-        except Exception as e:
-            print("CSV 保存失败:", e)
-
-    def clean_7days_old_files(self):
-        """扫描文件夹，删除 7 天前的文件"""
-        try:
-            now = datetime.now()
-            for filename in os.listdir(self.save_folder):
-                if filename.startswith("ECG_Log_") and filename.endswith(".csv"):
-                    # 从文件名中提取出日期 (比如 ECG_Log_2026-04-05.csv -> 2026-04-05)
-                    date_str = filename.replace("ECG_Log_", "").replace(".csv", "")
-                    try:
-                        file_date = datetime.strptime(date_str, '%Y-%m-%d')
-                        # 如果文件的日期距离今天超过 7 天
-                        if (now - file_date).days > 7:
-                            file_to_del = os.path.join(self.save_folder, filename)
-                            os.remove(file_to_del)
-                            print(f"已清理过期文件: {filename}")
-                    except ValueError:
-                        pass
-        except Exception as e:
-            pass
-
-
-# === 全局样式 ===
 FONT_NAME = 'simhei.ttf'
 EMOJI_FONT = 'seguiemj.ttf'
 Window.clearcolor = get_color_from_hex('#F9F9F9')
 
+def E(ch):
+    return f"[font={EMOJI_FONT}]{ch}[/font]"
 
-def E(emoji_char):
-    return f"[font={EMOJI_FONT}]{emoji_char}[/font]"
+class CSVDataManager:
+    def __init__(self):
+        self.last_save_time = 0
+        self.save_folder = self.get_save_folder()
+        self.clean_7days_old_files()
 
+    def get_save_folder(self):
+        if platform == 'android':
+            try:
+                from android.permissions import request_permissions, Permission
+                request_permissions([
+                    Permission.WRITE_EXTERNAL_STORAGE,
+                    Permission.READ_EXTERNAL_STORAGE,
+                    Permission.BLUETOOTH,
+                    Permission.BLUETOOTH_ADMIN,
+                    Permission.ACCESS_FINE_LOCATION
+                ])
+                from jnius import autoclass
+                Environment = autoclass('android.os.Environment')
+                base = Environment.getExternalStoragePublicDirectory(
+                    Environment.DIRECTORY_DOWNLOADS
+                ).getAbsolutePath()
+                folder = os.path.join(base, '心电数据记录')
+            except Exception:
+                folder = os.path.join(os.getcwd(), '心电数据记录')
+        else:
+            folder = os.path.join(os.getcwd(), '心电数据记录')
+        os.makedirs(folder, exist_ok=True)
+        return folder
+
+    def get_today_filename(self):
+        return os.path.join(self.save_folder, f"ECG_Log_{datetime.now().strftime('%Y-%m-%d')}.csv")
+
+    def save_data(self, bpm, hrv, rhythm):
+        now = time.time()
+        if now - self.last_save_time < 5.0 and rhythm == "Normal":
+            return
+        self.last_save_time = now
+        path = self.get_today_filename()
+        exists = os.path.isfile(path)
+        try:
+            with open(path, 'a', newline='', encoding='utf-8-sig') as f:
+                w = csv.writer(f)
+                if not exists:
+                    w.writerow(['记录时间', '心率(BPM)', 'HRV(ms)', '心律状态'])
+                w.writerow([datetime.now().strftime('%H:%M:%S'), bpm, hrv, rhythm])
+        except Exception as e:
+            print("CSV 保存失败:", e)
+
+    def clean_7days_old_files(self):
+        try:
+            now = datetime.now()
+            for fn in os.listdir(self.save_folder):
+                if fn.startswith("ECG_Log_") and fn.endswith(".csv"):
+                    ds = fn.replace("ECG_Log_", "").replace(".csv", "")
+                    try:
+                        if (now - datetime.strptime(ds, '%Y-%m-%d')).days > 7:
+                            os.remove(os.path.join(self.save_folder, fn))
+                    except Exception:
+                        pass
+        except Exception:
+            pass
 
 class RichLogBox(Label):
     def __init__(self, **kwargs):
@@ -125,216 +95,357 @@ class RichLogBox(Label):
         self.font_name = FONT_NAME
         self.font_size = '16sp'
         self.color = get_color_from_hex('#333333')
-
         with self.canvas.before:
             Color(1, 1, 1, 1)
             self.bg = Rectangle(pos=self.pos, size=self.size)
             Color(0.8, 0.8, 0.8, 1)
             self.border = Line(rectangle=(self.x, self.y, self.width, self.height), width=1)
-
         self.bind(pos=self.update_bg, size=self.update_bg)
 
     def update_bg(self, *args):
-        self.bg.pos = self.pos
-        self.bg.size = self.size
+        self.bg.pos, self.bg.size = self.pos, self.size
         self.border.rectangle = (self.x, self.y, self.width, self.height)
         self.text_size = (self.width - 30, self.height - 30)
 
-
-# ==========================================
-# 1. 强化版硬件线程 (支持 安卓 HC-05 蓝牙及 8字节硬件协议)
-# ==========================================
 class HardwareThread(threading.Thread):
-    def __init__(self, data_callback, status_callback):
+    STATUS_MAP = {"Invalid": 0, "Wait": 1, "Normal": 2, "AFib": 3, "PVC": 4}
+    LINE_PATTERN = re.compile(
+        r'ADC:\s*(\d+)\s*\|\s*'
+        r'ECG:\s*([+-]?\d+(?:\.\d+)?)\s*\|\s*'
+        r'BPM:\s*(\d+)\s*\|\s*'
+        r'RR:\s*(\d+)\s*\|\s*'
+        r'HRV:\s*(\d+)\s*\|\s*'
+        r'(Invalid|Wait|Normal|AFib|PVC)\s*$',
+        re.IGNORECASE
+    )
+
+    def __init__(self, data_cb, status_cb):
         super().__init__()
-        self.data_callback = data_callback
-        self.status_callback = status_callback
+        self.data_callback = data_cb
+        self.status_callback = status_cb
         self.running = True
-        self.daemon = True
+        self.ser = None
+        self.sock = None
+        self.in_stream = None
+        self.rx_buffer = ""
+        self.last_port = None
+        self.last_link_name = None
+        self.rhythm_window = deque(maxlen=5)
+        self.last_stable_rhythm = "Wait"
+
+    def emit_status(self, msg):
+        Clock.schedule_once(lambda dt: self.status_callback(msg), 0)
+
+    def emit_data(self, *args):
+        Clock.schedule_once(lambda dt: self.data_callback(*args), 0)
+
+    def normalize_rhythm(self, s):
+        s = s.strip().lower()
+        return {"invalid": "Invalid", "wait": "Wait", "normal": "Normal", "afib": "AFib", "pvc": "PVC"}.get(s, "Wait")
+
+    def smooth_rhythm(self, rhythm):
+        self.rhythm_window.append(rhythm)
+        if "Invalid" in self.rhythm_window:
+            self.last_stable_rhythm = "Invalid"
+            return "Invalid"
+        cnt = Counter(self.rhythm_window)
+        stable = max(cnt, key=cnt.get)
+        if cnt[stable] >= 2:
+            self.last_stable_rhythm = stable
+        return self.last_stable_rhythm
 
     def run(self):
         if platform == 'android':
-            self.run_android_bluetooth()
+            self.run_android_mode()
         else:
-            self.run_serial_mode()
+            self.run_pc_mode()
 
-    def run_android_bluetooth(self):
-        """安卓专属蓝牙 HC-05 SPP 读取通道"""
-        import time
-        from jnius import autoclass
+    # ---------- PC: USB串口 + 蓝牙串口(HC-05) ----------
+    def scan_ports(self):
+        try:
+            return list(serial.tools.list_ports.comports())
+        except Exception as e:
+            self.emit_status(f"【错误】串口扫描失败: {e}")
+            return []
 
-        while self.running:
-            self.status_callback("【蓝牙系统】正在手机配对列表中寻找 HC-05...")
-            socket = None
+    def find_candidate_ports(self):
+        ports = self.scan_ports()
+        if not ports:
+            return []
+        first_kw = ['HC-05', 'HC05', 'BLUETOOTH', 'STANDARD SERIAL OVER BLUETOOTH LINK']
+        other_kw = ['USB', 'SERIAL', 'CH340', 'CH341', 'CP210', 'UART', 'STM', 'ARDUINO', 'STLINK', 'VIRTUAL']
+        pri, sec, oth = [], [], []
+        for p in ports:
+            text = f"{p.device} {p.description} {p.manufacturer} {p.hwid}".upper()
+            if any(k in text for k in first_kw):
+                pri.append(p.device)
+            elif any(k in text for k in other_kw):
+                sec.append(p.device)
+            else:
+                oth.append(p.device)
+        out = []
+        for x in pri + sec + oth:
+            if x not in out:
+                out.append(x)
+        return out
+
+    def open_serial(self):
+        candidates = self.find_candidate_ports()
+        if not candidates:
+            self.emit_status("【扫描中】未检测到 USB/蓝牙串口设备，等待重试...")
+            return None
+        self.emit_status("【扫描中】候选链路: " + ", ".join(candidates))
+        for port in candidates:
             try:
-                BluetoothAdapter = autoclass('android.bluetooth.BluetoothAdapter')
-                UUID = autoclass('java.util.UUID')
-                adapter = BluetoothAdapter.getDefaultAdapter()
-
-                if adapter is None or not adapter.isEnabled():
-                    self.status_callback("【提示】请先在下拉菜单打开手机的主蓝牙功能！")
-                    time.sleep(5)
-                    continue
-
-                target_device = None
-                paired_devices = adapter.getBondedDevices().toArray()
-                for device in paired_devices:
-                    name = str(device.getName()).upper()
-                    # 寻找名字里带有 HC 或者 BT 的蓝牙设备
-                    if "HC" in name or "HC-05" in name or "BT" in name:
-                        target_device = device
-                        break
-
-                if not target_device:
-                    self.status_callback("【提示】未找到已配对的 HC-05 设备，请先去系统设置里配对")
-                    time.sleep(5)
-                    continue
-
-                spp_uuid = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
-                socket = target_device.createRfcommSocketToServiceRecord(spp_uuid)
-                socket.connect()
-
-                self.status_callback("【成功】蓝牙二进制通道打通，信号加载中...")
-                istream = socket.getInputStream()
-
-                while self.running:
-                    # 严格按照 C 语言发出的 8 字节二进制包解析
-                    if istream.read() == 0xAA:  # 帧头1
-                        if istream.read() == 0x55:  # 帧头2
-                            # 连续读取后续 6 字节
-                            adc_high = istream.read()
-                            adc_low = istream.read()
-                            bpm_val = istream.read()
-                            hrv_high = istream.read()
-                            hrv_low = istream.read()
-                            status_code = istream.read()
-
-                            adc_val = (adc_high << 8) | adc_low
-                            hrv_val = (hrv_high << 8) | hrv_low
-
-                            self.process_and_emit(adc_val, bpm_val, hrv_val, status_code)
-
-            except Exception as e:
-                self.status_callback("【警告】蓝牙连接中断或设备关机，重连中...")
-                if socket:
-                    try:
-                        socket.close()
-                    except:
-                        pass
-                time.sleep(3)
-
-    def run_serial_mode(self):
-        """PC 测试专用 USB 读取通道"""
-        import time
-        self.status_callback("【探测中】正在寻找 USB 链路...")
-        while self.running:
-            ports = list(serial.tools.list_ports.comports())
-            if not ports:
-                self.status_callback("【错误】未检测到串口设备，请检查 CH340 驱动！")
-                time.sleep(2)
-                continue
-
-            try:
-                ser = serial.Serial(ports[0].device, 115200, timeout=1)
+                ser = serial.Serial(port=port, baudrate=115200, timeout=0.03)
+                time.sleep(0.8)
                 ser.reset_input_buffer()
+                self.last_port = port
+                self.last_link_name = port
+                self.emit_status(f"【已连接】链路: {port}")
+                return ser
+            except Exception:
+                continue
+        self.emit_status("【扫描中】发现串口但无法打开，稍后重试...")
+        return None
 
-                while self.running:
-                    # 缓冲区过载保护：挤压了立刻丢掉，防止UI延迟
-                    if ser.in_waiting > 500:
-                        ser.reset_input_buffer()
-
-                    if ser.read(1) == b'\xaa':
-                        if ser.read(1) == b'\x55':
-                            data = ser.read(6)
-                            if len(data) == 6:
-                                adc_val = (data[0] << 8) | data[1]
-                                bpm_val = data[2]
-                                hrv_val = (data[3] << 8) | data[4]
-                                status_code = data[5]
-                                self.process_and_emit(adc_val, bpm_val, hrv_val, status_code)
+    def run_pc_mode(self):
+        self.emit_status("【探测中】正在寻找 STM32 USB / HC-05 蓝牙串口...")
+        while self.running:
+            if self.ser is None:
+                self.ser = self.open_serial()
+                if self.ser is None:
+                    time.sleep(1.0)
+                    continue
+            try:
+                waiting = self.ser.in_waiting
+                if waiting > 2048:
+                    self.ser.reset_input_buffer()
+                    self.rx_buffer = ""
+                data = self.ser.read(waiting if waiting > 0 else 1)
+                if not data:
+                    time.sleep(0.005)
+                    continue
+                self.feed_text(data.decode('utf-8', errors='ignore'))
             except Exception as e:
-                self.status_callback(f"【链路中断】: {str(e)}")
-                time.sleep(2)
+                self.emit_status(f"【链路断开】{self.last_link_name or ''}，正在重连... {e}")
+                self.close_link()
+                time.sleep(1.0)
 
-    def process_and_emit(self, adc, bpm, hrv, status_code):
-        # 1. 状态映射 (完美贴合 UI 判断逻辑)
-        status_map = {
-            0: "Wait",  # 导联脱落
-            1: "Wait",  # 计算中
-            2: "Normal",  # 正常
-            3: "AFib",  # 房颤
-            4: "PVC"  # 早搏
-        }
-        rhythm_str = status_map.get(status_code, "Wait")
+    # ---------- Android: HC-05 经典蓝牙 ----------
+    def run_android_mode(self):
+        self.emit_status("【探测中】正在连接 HC-05 蓝牙...")
+        while self.running:
+            if self.sock is None:
+                if not self.open_android_hc05():
+                    time.sleep(1.5)
+                    continue
+            try:
+                avail = self.in_stream.available()
+                if avail > 2048:
+                    while self.in_stream.available() > 0:
+                        self.in_stream.read()
+                    self.rx_buffer = ""
+                    continue
+                if avail > 0:
+                    buf = bytearray()
+                    for _ in range(avail):
+                        b = self.in_stream.read()
+                        if b >= 0:
+                            buf.append(b & 0xFF)
+                    if buf:
+                        self.feed_text(bytes(buf).decode('utf-8', errors='ignore'))
+                else:
+                    time.sleep(0.01)
+            except Exception as e:
+                self.emit_status(f"【蓝牙断开】HC-05，正在重连... {e}")
+                self.close_link()
+                time.sleep(1.5)
 
-        # 2. 将 ADC(0-4095) 处理为 UI 原本识别的震荡幅度浮点数
-        ecg_val = (adc - 2048.0) / 10.0
+    def open_android_hc05(self):
+        try:
+            from android.permissions import request_permissions, Permission
+            perms = [Permission.BLUETOOTH, Permission.BLUETOOTH_ADMIN, Permission.ACCESS_FINE_LOCATION]
+            for p in ("BLUETOOTH_CONNECT", "BLUETOOTH_SCAN"):
+                if hasattr(Permission, p):
+                    perms.append(getattr(Permission, p))
+            request_permissions(perms)
 
-        # 3. 实时推送给 UI
-        self.data_callback(ecg_val, bpm, hrv, rhythm_str)
+            from jnius import autoclass
+            UUID = autoclass('java.util.UUID')
+            BluetoothAdapter = autoclass('android.bluetooth.BluetoothAdapter')
+            adapter = BluetoothAdapter.getDefaultAdapter()
+            if adapter is None:
+                self.emit_status("【错误】设备不支持蓝牙")
+                return False
+            if not adapter.isEnabled():
+                self.emit_status("【提示】请先在手机系统里开启蓝牙，并完成 HC-05 配对")
+                return False
 
-        # 4. 存入 CSV 管理器
-        if bpm > 0 and rhythm_str != "Wait":
-            app = App.get_running_app()
-            if hasattr(app, 'csv_manager'):
-                app.csv_manager.save_data(bpm, hrv, rhythm_str)
+            bonded = adapter.getBondedDevices().toArray()
+            dev = None
+            for d in bonded:
+                name = str(d.getName() or "").upper()
+                addr = str(d.getAddress() or "")
+                if "HC-05" in name or "HC05" in name:
+                    dev = d
+                    self.last_link_name = f"HC-05 ({addr})"
+                    break
+
+            if dev is None:
+                self.emit_status("【提示】未找到已配对的 HC-05，请先在系统蓝牙中配对")
+                return False
+
+            spp = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
+            try:
+                adapter.cancelDiscovery()
+            except Exception:
+                pass
+
+            sock = dev.createRfcommSocketToServiceRecord(spp)
+            sock.connect()
+            self.sock = sock
+            self.in_stream = sock.getInputStream()
+            self.last_link_name = f"HC-05 ({dev.getAddress()})"
+            self.emit_status(f"【已连接】蓝牙: {self.last_link_name}")
+            return True
+        except Exception as e:
+            self.emit_status(f"【蓝牙连接失败】{e}")
+            self.close_link()
+            return False
+
+    # ---------- parse ----------
+    def feed_text(self, text):
+        if not text:
+            return
+        self.rx_buffer += text
+        if len(self.rx_buffer) > 8192:
+            self.rx_buffer = self.rx_buffer[-2048:]
+        while '\n' in self.rx_buffer:
+            line, self.rx_buffer = self.rx_buffer.split('\n', 1)
+            line = line.replace('\r', '').strip()
+            if line:
+                self.parse_line(line)
+
+    def parse_line(self, line):
+        try:
+            m = self.LINE_PATTERN.match(line)
+            if not m:
+                return
+            adc_val, ecg_val, bpm_val, rr_val, hrv_val = int(m.group(1)), float(m.group(2)), int(m.group(3)), int(m.group(4)), int(m.group(5))
+            raw_rhythm = self.normalize_rhythm(m.group(6))
+            if not (0 <= adc_val <= 4095 and 0 <= bpm_val <= 240 and 0 <= rr_val <= 3000 and 0 <= hrv_val <= 3000):
+                return
+            ecg_val = max(-200.0, min(200.0, ecg_val))
+            rhythm = self.smooth_rhythm(raw_rhythm)
+            code = self.STATUS_MAP.get(rhythm, 1)
+            self.emit_data(adc_val, ecg_val, bpm_val, rr_val, hrv_val, rhythm, code)
+
+            if bpm_val > 0 and rhythm in ("Normal", "AFib", "PVC"):
+                app = App.get_running_app()
+                if app and hasattr(app, 'csv_manager'):
+                    app.csv_manager.save_data(bpm_val, hrv_val, rhythm)
+        except Exception as e:
+            print("parse_line 错误:", e, line)
+
+    def close_link(self):
+        try:
+            if self.ser:
+                self.ser.close()
+        except Exception:
+            pass
+        try:
+            if self.in_stream:
+                self.in_stream.close()
+        except Exception:
+            pass
+        try:
+            if self.sock:
+                self.sock.close()
+        except Exception:
+            pass
+        self.ser = None
+        self.sock = None
+        self.in_stream = None
+        self.rx_buffer = ""
 
     def stop(self):
         self.running = False
-
-
-# ==========================================
-# 2. 精密 ECG 绘图 Widget
-# ==========================================
-from kivy.uix.floatlayout import FloatLayout
+        self.close_link()
 
 
 class ECGPlotWidget(FloatLayout):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.data_len = 1000
-        self.ecg_buffer = np.zeros(self.data_len)
+
+        self.data_len = 780
+        self.ecg_buffer = np.zeros(self.data_len, dtype=float)
         self.ptr = 0
         self.display_mode = 'FLAT'
 
-        self.baseline = 0.0
-        self.smooth_window = []
-        self.window_size = 15
+        # ===== 真正的临床监护仪滤波状态 (Bandpass 0.5-40Hz 模拟) =====
+        self.last_val = 0.0
+        self.dc_out = 0.0
+        self.lp1 = 0.0
+        self.lp2 = 0.0
+
+        # 多重抗干扰窗口
+        self.med_buf = deque(maxlen=3)  # 清除硬件极端尖刺
+        self.ma_buf = deque(maxlen=4)  # 抹平肌电细碎高频抖动
+
+        # 线性固定增益 (因为不再强行压缩，增益需要重新匹配)
+        self.fixed_gain = 4.0
+        self.display_gain = 4.0
 
         with self.canvas.before:
-            Color(1, 1, 1, 1)
+            Color(*get_color_from_hex('#FAFBFC'))
             self.bg = Rectangle()
+
             self.grid_lines = InstructionGroup()
             self.canvas.before.add(self.grid_lines)
 
         with self.canvas:
-            Color(*get_color_from_hex('#e74c3c'))
-            self.line = Line(points=[], width=1.2)
+            # 强化绘制粗细，让质感更接近真实监护仪
+            Color(0.91, 0.30, 0.24, 0.12)
+            self.glow_line = Line(points=[], width=4.0, cap='round', joint='round')
 
-        self.bind(pos=self.update_canvas, size=self.update_canvas)
+            Color(0.91, 0.30, 0.24, 0.22)
+            self.mid_line = Line(points=[], width=2.4, cap='round', joint='round')
+
+            Color(*get_color_from_hex('#e74c3c'))
+            self.line = Line(points=[], width=1.65, cap='round', joint='round')  # 稍微加粗一点点
 
         self.y_labels = []
         for y_val in [60, 40, 20, 0, -20, -40, -60]:
-            lbl = Label(text=str(y_val), color=get_color_from_hex('#999999'),
-                        font_size='12sp', size_hint=(None, None), size=(35, 20))
+            lbl = Label(
+                text=str(y_val),
+                color=get_color_from_hex('#A0A7B4'),
+                font_size='11sp',
+                size_hint=(None, None),
+                size=(36, 20),
+                font_name=FONT_NAME
+            )
             self.add_widget(lbl)
             self.y_labels.append((lbl, y_val))
 
         self.x_labels = []
-        for x_val in [0, 200, 400, 600, 800, 1000]:
-            lbl = Label(text=str(x_val), color=get_color_from_hex('#999999'),
-                        font_size='12sp', size_hint=(None, None), size=(40, 20))
+        for x_val in [0, 156, 312, 468, 624, 780]:
+            lbl = Label(
+                text=str(x_val),
+                color=get_color_from_hex('#A0A7B4'),
+                font_size='11sp',
+                size_hint=(None, None),
+                size=(42, 20),
+                font_name=FONT_NAME
+            )
             self.add_widget(lbl)
             self.x_labels.append((lbl, x_val))
 
+        self.bind(pos=self.update_canvas, size=self.update_canvas)
         Clock.schedule_interval(self.render, 1.0 / 60.0)
 
     def update_canvas(self, *args):
-        pad_left = 40
-        pad_bottom = 25
-        pad_right = 10
-        pad_top = 10
-
+        pad_left, pad_bottom, pad_right, pad_top = 42, 28, 12, 12
         plot_x = self.x + pad_left
         plot_y = self.y + pad_bottom
         plot_w = self.width - pad_left - pad_right
@@ -344,330 +455,464 @@ class ECGPlotWidget(FloatLayout):
         self.bg.size = (plot_w, plot_h)
         self.grid_lines.clear()
 
-        y_range = 120.0
+        self.grid_lines.add(Color(*get_color_from_hex('#FFFFFF')))
+        self.grid_lines.add(Rectangle(pos=(plot_x, plot_y), size=(plot_w, plot_h)))
+
+        for y_frac in np.linspace(0, 1, 13):
+            y = plot_y + y_frac * plot_h
+            self.grid_lines.add(Color(0.95, 0.96, 0.98, 1))
+            self.grid_lines.add(Line(points=[plot_x, y, plot_x + plot_w, y], width=0.8))
+
+        for x_frac in np.linspace(0, 1, 11):
+            x = plot_x + x_frac * plot_w
+            self.grid_lines.add(Color(0.96, 0.97, 0.985, 1))
+            self.grid_lines.add(Line(points=[x, plot_y, x, plot_y + plot_h], width=0.8))
+
         for lbl, y_val in self.y_labels:
-            norm_y = (y_val + 60) / y_range
-            y_pos = plot_y + norm_y * plot_h
-            lbl.pos = (self.x, y_pos - lbl.height / 2)
+            y_pos = plot_y + ((y_val + 60) / 120.0) * plot_h
+            lbl.pos = (self.x - 2, y_pos - lbl.height / 2)
 
             if y_val == 0:
-                self.grid_lines.add(Color(0.85, 0.85, 0.85, 1))
-                self.grid_lines.add(Line(points=[plot_x, y_pos, plot_x + plot_w, y_pos], width=1.2))
+                self.grid_lines.add(Color(*get_color_from_hex('#D7DEE8')))
+                self.grid_lines.add(Line(points=[plot_x, y_pos, plot_x + plot_w, y_pos], width=1.4))
             else:
-                self.grid_lines.add(Color(0.94, 0.94, 0.94, 1))
-                self.grid_lines.add(Line(points=[plot_x, y_pos, plot_x + plot_w, y_pos], width=1))
+                self.grid_lines.add(Color(*get_color_from_hex('#ECEFF4')))
+                self.grid_lines.add(Line(points=[plot_x, y_pos, plot_x + plot_w, y_pos], width=1.0))
 
-        x_range = 1000.0
         for lbl, x_val in self.x_labels:
-            norm_x = x_val / x_range
-            x_pos = plot_x + norm_x * plot_w
+            x_pos = plot_x + (x_val / float(self.data_len)) * plot_w
+            lbl.pos = (x_pos - lbl.width / 2, self.y - 1)
 
-            lbl.pos = (x_pos - lbl.width / 2, self.y)
-            self.grid_lines.add(Color(0.94, 0.94, 0.94, 1))
-            self.grid_lines.add(Line(points=[x_pos, plot_y, x_pos, plot_y + plot_h], width=1))
+            self.grid_lines.add(Color(*get_color_from_hex('#EEF2F6')))
+            self.grid_lines.add(Line(points=[x_pos, plot_y, x_pos, plot_y + plot_h], width=1.0))
 
-        self.grid_lines.add(Color(0.8, 0.8, 0.8, 1))
-        self.grid_lines.add(Line(rectangle=(plot_x, plot_y, plot_w, plot_h), width=1))
+        self.grid_lines.add(Color(*get_color_from_hex('#DDE3EA')))
+        self.grid_lines.add(Line(rectangle=(plot_x, plot_y, plot_w, plot_h), width=1.15))
+
         self.plot_rect = (plot_x, plot_y, plot_w, plot_h)
 
     def push_data(self, value):
-        # 1. 【极速基线回正】 (把 0.05 改成 0.25，提高 5 倍回正速度！)
-        self.baseline = self.baseline * 0.75 + value * 0.25
-        clean_value = value - self.baseline
+        raw = float(value)
+        raw = max(-200.0, min(200.0, raw))  # 硬件级防爆音限幅
 
-        # 2. 【智能抗噪低通滤网】 (增大旧数据权重到 0.85)
-        if not hasattr(self, 'last_smoothed'): self.last_smoothed = 0
-        self.last_smoothed = self.last_smoothed * 0.85 + clean_value * 0.15
+        # ==========================================
+        #  STEP 1: 中值滤波 (专治硬件单点极端尖刺突破)
+        # ==========================================
+        self.med_buf.append(raw)
+        if len(self.med_buf) < 3:
+            m_val = raw
+        else:
+            m_val = float(np.median(self.med_buf))
 
-        # 3. 【防削峰动态倍率】
-        final_value = self.last_smoothed * 1.8
+        # ==========================================
+        #  STEP 2: 均值滤波 (抹平细碎的肌电/工频干扰锯齿)
+        # ==========================================
+        self.ma_buf.append(m_val)
+        ma_val = sum(self.ma_buf) / len(self.ma_buf)
 
-        # 4. 【溢出保护】 防止极端移动导致界面崩溃
-        if final_value > 80: final_value = 80
-        if final_value < -80: final_value = -80
+        # ==========================================
+        #  STEP 3: DC Blocker - 超稳高通滤波
+        #  (监护仪核心技术：瞬间去基线漂移，绝无滞后感)
+        # ==========================================
+        self.dc_out = ma_val - self.last_val + 0.992 * self.dc_out
+        self.last_val = ma_val
 
-        self.ecg_buffer[self.ptr] = final_value
+        # ==========================================
+        #  STEP 4: 双级巴特沃斯风格平滑 (监护模式低通)
+        #  (只有这种线性算法，才能保留 P、QRS、T 的真实弯曲弧度)
+        # ==========================================
+        alpha = 0.55
+        self.lp1 = alpha * self.lp1 + (1.0 - alpha) * self.dc_out
+        self.lp2 = alpha * self.lp2 + (1.0 - alpha) * self.lp1
+
+        # 取出信号，此时是一条非常连续干净的曲线
+        signal = self.lp2
+
+        # 乘上增益进行显示
+        y = signal * self.display_gain
+
+        # 柔和削峰，保护超出屏幕的极值，避免和方格边框冲突
+        limit = 35.0
+        if abs(y) > limit:
+            s_sign = 1.0 if y > 0 else -1.0
+            y = s_sign * (limit + (abs(y) - limit) * 0.15)
+
+        # 绝对限幅
+        y = max(-50.0, min(50.0, y))
+
+        # 送入画布循环
+        self.ecg_buffer[self.ptr] = y
         self.ptr = (self.ptr + 1) % self.data_len
 
+    def clear_wave(self):
+        self.ecg_buffer[:] = 0
+        self.ptr = 0
+        self.last_val = 0.0
+        self.dc_out = 0.0
+        self.lp1 = 0.0
+        self.lp2 = 0.0
+        self.med_buf.clear()
+        self.ma_buf.clear()
+        self.display_gain = self.fixed_gain
+
     def render(self, dt):
-        if not hasattr(self, 'plot_rect'): return
+        if not hasattr(self, 'plot_rect'):
+            return
+
         plot_x, plot_y, plot_w, plot_h = self.plot_rect
-        if plot_w <= 0 or plot_h <= 0: return
-
-        points = []
-        x_step = plot_w / (self.data_len - 1)
-
-        y_min, y_max = -60.0, 60.0
-        y_range = y_max - y_min
+        if plot_w <= 0 or plot_h <= 0:
+            return
 
         if self.display_mode == 'FLAT':
-            norm_y = (0 - y_min) / y_range
-            y = plot_y + norm_y * plot_h
-            points = [plot_x, y, plot_x + plot_w, y]
-        else:
-            for i in range(self.data_len):
-                idx = (self.ptr + i) % self.data_len
-                val = self.ecg_buffer[idx]
-                val = max(y_min, min(y_max, val))
+            y0 = plot_y + ((0 + 60.0) / 120.0) * plot_h
+            pts = [plot_x, y0, plot_x + plot_w, y0]
+            self.glow_line.points = pts
+            self.mid_line.points = pts
+            self.line.points = pts
+            return
 
-                norm_y = (val - y_min) / y_range
-                y = plot_y + norm_y * plot_h
-                x = plot_x + i * x_step
-                points.extend([x, y])
+        pts = []
+        x_step = plot_w / (self.data_len - 1)
 
-        self.line.points = points
+        for i in range(self.data_len):
+            idx = (self.ptr + i) % self.data_len
+            val = max(-60.0, min(60.0, self.ecg_buffer[idx]))
+            x = plot_x + i * x_step
+            y = plot_y + ((val + 60.0) / 120.0) * plot_h
+            pts.extend([x, y])
 
+        self.glow_line.points = pts
+        self.mid_line.points = pts
+        self.line.points = pts
 
-# ==========================================
-# 3. 主应用 App
-# ==========================================
 class ECGApp(App):
     def build(self):
-        self.title = "AI辅助心电预警系统 "
+        self.title = "AI辅助心电预警系统"
 
+        self.monitor_started = False
+        self.current_adc = 0
+        self.current_ecg = 0.0
         self.current_bpm = 0
+        self.current_rr = 0
         self.current_hrv = 0
-        # 【修复1】默认设定为 Wait，绝不盲目乐观预判为正常
         self.current_rhythm = "Wait"
+        self.current_status_code = 1
+
+        self.last_good_bpm = 0
+        self.last_good_hrv = 0
+        self.final_bpm = 0
+        self.final_hrv = 0
+
         self.diag_status = 'IDLE'
-        self.prep_countdown = 0
-        self.valid_data_ticks = 0
-        self.rhythm_history = deque(maxlen=10)
+        self.prep_countdown = 0.0
+        self.valid_data_ticks = 0.0
+        self.rhythm_history = deque(maxlen=20)
+        self.stable_rhythm_window = deque(maxlen=6)
+
         self.last_sms_time = 0
-        self.last_valid_data_time = 0
+        self.last_frame_time = 0
+        self.last_valid_signal_time = 0
+
+        self.adc_history = deque(maxlen=80)
+        self.ecg_history = deque(maxlen=80)
+        self.py_lead_off = False
+        self.py_lead_msg = ""
 
         root = BoxLayout(orientation='vertical', padding=15, spacing=12)
 
-        # ====== 顶部信息 ======
         top_row = BoxLayout(size_hint_y=0.15, spacing=15)
+
         left_col = BoxLayout(orientation='horizontal', size_hint_x=0.25)
         self.heart_label = Label(text="❤️", font_size='40sp', halign='center', valign='middle', font_name=EMOJI_FONT)
         self.heart_label.bind(size=self.heart_label.setter('text_size'))
-
         self.bpm_label = Label(text="--", font_size='36sp', bold=True, color=get_color_from_hex('#333333'),
                                halign='center', valign='middle', font_name=FONT_NAME)
         self.bpm_label.bind(size=self.bpm_label.setter('text_size'))
         left_col.add_widget(self.heart_label)
         left_col.add_widget(self.bpm_label)
-        top_row.add_widget(left_col)
 
         mid_col = BoxLayout(orientation='vertical', size_hint_x=0.25)
         self.hrv_label = Label(text="HRV: -- ms", font_size='22sp', bold=True, color=get_color_from_hex('#555555'),
                                halign='center', valign='middle', font_name=FONT_NAME)
         self.hrv_label.bind(size=self.hrv_label.setter('text_size'))
         mid_col.add_widget(self.hrv_label)
-        top_row.add_widget(mid_col)
 
         right_col = BoxLayout(orientation='vertical', size_hint_x=0.5)
         self.status_label = Label(text="状态: 待机就绪", font_size='20sp', bold=True,
                                   color=get_color_from_hex('#555555'), halign='right', valign='middle',
                                   font_name=FONT_NAME)
         self.status_label.bind(size=self.status_label.setter('text_size'))
-
         self.btn_diag = Button(text="开始进行诊断", size_hint_y=0.6, font_size='18sp', bold=True,
                                background_color=get_color_from_hex('#0078D7'), color=(1, 1, 1, 1), font_name=FONT_NAME)
         self.btn_diag.bind(on_press=self.start_manual_diagnosis)
-
         right_col.add_widget(self.status_label)
         right_col.add_widget(self.btn_diag)
+
+        top_row.add_widget(left_col)
+        top_row.add_widget(mid_col)
         top_row.add_widget(right_col)
         root.add_widget(top_row)
 
-        # ====== 中部波形图 ======
         self.graph = ECGPlotWidget(size_hint_y=0.6)
         root.add_widget(self.graph)
 
-        # ====== 底部日志 ======
         self.advice_box = RichLogBox(size_hint_y=0.25)
         self.advice_box.text = f"{E('💡')} 系统核心引擎启动，连接协议寻址中...\n(注：请确保单片机电极片已可靠粘连皮肤)"
         root.add_widget(self.advice_box)
 
-        Clock.schedule_interval(self.update_ui, 0.5)
-        self.heart_anim_event = Clock.schedule_interval(self.animate_heart, 0.8)
-
+        self.csv_manager = CSVDataManager()
         self.hw_thread = HardwareThread(self.on_serial_data, self.update_conn_ui)
         self.hw_thread.start()
 
-        self.csv_manager = CSVDataManager()
-
+        Clock.schedule_interval(self.update_ui, 0.5)
+        self.heart_anim_event = Clock.schedule_interval(self.animate_heart, 0.8)
         return root
 
     def update_conn_ui(self, msg):
-        Clock.schedule_once(lambda dt: setattr(self.advice_box, 'text', msg), 0)
+        self.advice_box.text = msg
 
-    def on_serial_data(self, ecg_val, bpm_val, hrv_val, rhythm_str):
-        self.last_valid_data_time = time.time()
-        self.graph.push_data(ecg_val)
+    def check_py_lead_off(self):
+        if len(self.adc_history) < 20 or len(self.ecg_history) < 20:
+            self.py_lead_off, self.py_lead_msg = False, ""
+            return
+        adc_arr, ecg_arr = np.array(self.adc_history, dtype=float), np.array(self.ecg_history, dtype=float)
+        adc_mean, adc_std = np.mean(adc_arr), np.std(adc_arr)
+        ecg_std, ecg_pp = np.std(ecg_arr), np.max(ecg_arr) - np.min(ecg_arr)
 
-        # 【修复2】如果是脱落或者测不出心率，强制压制状态，绝不沿用以前状态
-        if rhythm_str == "Wait" or bpm_val == 0:
-            self.current_rhythm = "Wait"
-        else:
-            self.current_bpm = bpm_val
-            self.current_hrv = hrv_val
-            self.current_rhythm = rhythm_str
+        checks = [
+            ((adc_mean < 80) or (adc_mean > 4015), "ADC贴边，疑似电极脱落/输入饱和"),
+            (adc_std < 2.0, "ADC几乎无变化，疑似未接入有效信号"),
+            ((ecg_pp < 0.8 and ecg_std < 0.25 and self.current_bpm == 0), "ECG几乎无波动且无有效心率，疑似电极脱落"),
+            ((ecg_pp > 80 and self.current_bpm == 0), "ECG异常乱跳，疑似电极接触不良"),
+            ((self.current_rhythm == "Wait" and ecg_pp < 1.0 and adc_std < 5.0), "长时间无稳定心律且波形过平，疑似导联异常")
+        ]
+        for cond, msg in checks:
+            if cond:
+                self.py_lead_off, self.py_lead_msg = True, msg
+                return
+        self.py_lead_off, self.py_lead_msg = False, ""
 
-        if self.diag_status != 'IDLE':
-            self.graph.display_mode = 'WAVE'
+    def on_serial_data(self, adc_val, ecg_val, bpm_val, rr_val, hrv_val, rhythm_str, status_code):
+        self.last_frame_time = time.time()
+        self.current_adc, self.current_ecg, self.current_bpm = adc_val, ecg_val, bpm_val
+        self.current_rr, self.current_hrv, self.current_status_code = rr_val, hrv_val, status_code
+
+        self.stable_rhythm_window.append(rhythm_str)
+        self.current_rhythm = (max({r: self.stable_rhythm_window.count(r) for r in set(self.stable_rhythm_window)},
+                                   key=lambda k: self.stable_rhythm_window.count(k))
+                               if len(self.stable_rhythm_window) >= 3 else rhythm_str)
+
+        self.adc_history.append(adc_val)
+        self.ecg_history.append(ecg_val)
+        self.check_py_lead_off()
+
+        if status_code != 0 and not self.py_lead_off:
+            self.last_valid_signal_time = time.time()
+
+        if not self.monitor_started:
+            return
+
+        if status_code != 0 and not self.py_lead_off:
+            self.graph.push_data(ecg_val)
+
+        if 35 <= bpm_val <= 200:
+            self.last_good_bpm = bpm_val
+        if 1 <= hrv_val <= 2000:
+            self.last_good_hrv = hrv_val
 
     def animate_heart(self, dt):
+        if not self.monitor_started:
+            self.heart_label.font_size = 40
+            self.heart_label.color = get_color_from_hex('#e74c3c')
+            return
+
+        bpm = self.current_bpm if self.current_bpm > 30 else self.last_good_bpm
         self.heart_label.font_size = 46
         self.heart_label.color = get_color_from_hex('#c0392b')
-        Clock.schedule_once(lambda dt: self.reset_heart(), 0.15)
+        Clock.schedule_once(lambda d: self.reset_heart(), 0.15)
 
-        if self.current_bpm > 30 and self.diag_status != 'IDLE':
-            interval = max(300, min(60000 // self.current_bpm, 2000))
+        try:
             self.heart_anim_event.cancel()
-            self.heart_anim_event = Clock.schedule_interval(self.animate_heart, interval / 1000.0)
-        else:
-            self.heart_anim_event.cancel()
-            self.heart_anim_event = Clock.schedule_interval(self.animate_heart, 0.8)
+        except Exception:
+            pass
+        self.heart_anim_event = Clock.schedule_interval(self.animate_heart, max(0.3, 60.0 / bpm) if bpm > 30 else 0.8)
 
     def reset_heart(self):
         self.heart_label.font_size = 40
         self.heart_label.color = get_color_from_hex('#e74c3c')
 
     def start_manual_diagnosis(self, instance):
-        self.diag_status = 'PREPARING'
-        self.prep_countdown = 6
+        if (time.time() - self.last_frame_time) > 1.5:
+            self.status_label.text = "状态: 未检测到串口数据"
+            self.status_label.color = get_color_from_hex('#e74c3c')
+            self.advice_box.text = "【提示】请先确认 STM32 已持续发送 printf 文本数据。"
+            return
+
+        self.monitor_started = True
+        if self.current_status_code == 0 or self.py_lead_off:
+            self.status_label.text = "状态: 导联异常"
+            self.status_label.color = get_color_from_hex('#e74c3c')
+            self.advice_box.text = "【提示】当前硬件判断为导联脱落/信号异常，请先修复电极接触。" if self.current_status_code == 0 \
+                else f"【提示】{self.py_lead_msg or 'Python端判断疑似电极脱落/接触不良，请检查电极。'}"
+            return
+
+        self.graph.clear_wave()
+        self.last_good_bpm = self.last_good_hrv = 0
+        self.diag_status, self.prep_countdown, self.valid_data_ticks = 'PREPARING', 6.0, 0.0
+        self.rhythm_history.clear()
+
         self.btn_diag.text = "消解杂波中..."
         self.btn_diag.disabled = True
-        self.status_label.text = f"基线平复倒数: {self.prep_countdown} 秒..."
+        self.status_label.text = f"基线平复倒数: {int(self.prep_countdown)} 秒..."
         self.status_label.color = get_color_from_hex('#2980b9')
         self.bpm_label.text = "--"
         self.hrv_label.text = "HRV: -- ms"
-
         self.graph.display_mode = 'WAVE'
-        self.last_valid_data_time = time.time()
+        self.last_valid_signal_time = time.time()
+        self.advice_box.text = "【贴片平复期】侦测探头已唤醒。受电极接触与坐姿影响，前几秒数值易漂移。\n" \
+                               f"   {E('👉')} 请保持深呼吸并贴紧皮肤，静候 6 秒消除物理干扰。"
 
-        self.advice_box.text = (
-            "【贴片平复期】侦测探头已唤醒。受电极接触与坐姿影响，前几秒数值易漂移。\n"
-            f"   {E('👉')} 请保持深呼吸并贴紧皮肤，静候 6 秒消除物理干扰。"
-        )
+    def finish_diag_logic(self):
+        if self.last_good_bpm <= 0:
+            self.final_bpm = self.final_hrv = 0
+            self.status_label.text = "诊断结果: 无有效心率数据"
+            self.status_label.color = get_color_from_hex('#c0392b')
+            self.advice_box.text = "【结论快照】本轮未形成有效心率结果，请检查电极接触后重试。"
+        else:
+            self.final_bpm, self.final_hrv = self.last_good_bpm, self.last_good_hrv
+            normal_cnt = self.rhythm_history.count("Normal")
+            afib_cnt = self.rhythm_history.count("AFib")
+            pvc_cnt = self.rhythm_history.count("PVC")
+            total_valid = normal_cnt + afib_cnt + pvc_cnt
+
+            if total_valid < 4:
+                self.status_label.text = "诊断结果: 数据不足"
+                self.status_label.color = get_color_from_hex('#7f8c8d')
+                self.advice_box.text = "【结论快照】有效样本不足，本轮无法给出稳定结论，请延长采集后重试。"
+            elif afib_cnt >= 4 and afib_cnt > normal_cnt and afib_cnt >= pvc_cnt:
+                self.status_label.text = "诊断结果: 疑似房颤 (AFib)"
+                self.status_label.color = get_color_from_hex('#c0392b')
+                self.advice_box.text = f"{E('❌')} 【结论快照】捕捉到明显不规则RR间期序列，疑似房颤。"
+                self.show_alert_popup("⚠️ 高危心电异常预警", "系统检测到连续不规则 RR 间期（疑似房颤），\n请及时进一步检查。")
+            elif pvc_cnt >= 4 and pvc_cnt > normal_cnt and pvc_cnt > afib_cnt:
+                self.status_label.text = "诊断结果: 室性早搏 (PVC)"
+                self.status_label.color = get_color_from_hex('#d35400')
+                self.advice_box.text = f"{E('⚠️')} 【结论快照】检测到节律提前与代偿间歇，疑似室性早搏。"
+                self.show_alert_popup("⚠️ 注意: 节律异常", "系统检测到疑似早搏信号，\n若频繁出现建议进一步观察。")
+            else:
+                self.status_label.text = "诊断结果: 正常心律"
+                self.status_label.color = get_color_from_hex('#27ae60')
+                self.advice_box.text = f"{E('✅')} 【结论快照】心电节律整体平稳，当前结果倾向正常心律。"
+
+        self.diag_status = 'DONE'
+        self.btn_diag.disabled = False
+        self.btn_diag.text = "复位并开启全新捕获"
 
     def update_ui(self, dt):
-        now_time = time.time()
-        is_disconnected = (now_time - self.last_valid_data_time) > 1.5
+        now = time.time()
+        serial_online = (now - self.last_frame_time) <= 1.5
+        signal_valid = (now - self.last_valid_signal_time) <= 1.5
 
         if self.diag_status == 'IDLE':
             self.bpm_label.text = "--"
             self.hrv_label.text = "HRV: -- ms"
             self.graph.display_mode = 'FLAT'
+            if not serial_online:
+                self.status_label.text, self.status_label.color = "状态: 串口未连接", get_color_from_hex('#555555')
+            elif self.current_status_code == 0 or self.py_lead_off:
+                self.status_label.text, self.status_label.color = "状态: 导联异常", get_color_from_hex('#e74c3c')
+            else:
+                self.status_label.text = "状态: 待机就绪" if self.current_rhythm == "Wait" else f"状态: 数据接收正常 ({self.current_rhythm})"
+                self.status_label.color = get_color_from_hex('#555555')
             return
 
-        if is_disconnected:
+        if not serial_online:
             self.bpm_label.text = "--"
             self.hrv_label.text = "HRV: -- ms"
             self.graph.display_mode = 'FLAT'
-
             if self.diag_status in ['PREPARING', 'RUNNING']:
-                self.advice_box.text = (
-                    f"{E('⚠️')}【检测中断警告：链路静默】\n"
-                    "未侦测到实时硬件波形！请确认：\n"
-                    "1. 蓝牙连接或COM通讯端是否正常工作。\n"
-                    "2. 传感器导联金属片是否完全贴紧肌肤导电。"
-                )
+                self.advice_box.text = f"{E('⚠️')}【检测中断警告：链路静默】\n未侦测到实时硬件波形！请确认：\n" \
+                                       "1. 连接线是否插稳，COM通讯端是否被其他程序占用。\n2. 传感器导联金属片是否完全贴紧肌肤导电。"
                 self.diag_status = 'IDLE'
                 self.btn_diag.disabled = False
-                self.btn_diag.text = "重置以打通硬体链路"
+                self.btn_diag.text = "复位并开启全新捕获"
                 self.status_label.text = "状态: 失去硬件连接响应"
                 self.status_label.color = get_color_from_hex('#e74c3c')
             return
-        else:
-            if self.current_bpm > 0:
-                self.bpm_label.text = str(self.current_bpm)
-                self.hrv_label.text = f"HRV: {self.current_hrv} ms"
+
+        if self.current_status_code == 0 or self.py_lead_off:
+            self.bpm_label.text = "--"
+            self.hrv_label.text = "HRV: -- ms"
+            self.graph.display_mode = 'FLAT'
+            self.status_label.text = "状态: 导联脱落 / 信号异常"
+            self.status_label.color = get_color_from_hex('#e74c3c')
+            if self.diag_status in ['PREPARING', 'RUNNING']:
+                self.diag_status = 'IDLE'
+                self.btn_diag.disabled = False
+                self.btn_diag.text = "复位并开启全新捕获"
+            if self.py_lead_msg:
+                self.advice_box.text = f"【提示】{self.py_lead_msg}"
+            return
+
+        self.graph.display_mode = 'WAVE' if signal_valid else 'FLAT'
+        show_bpm = self.current_bpm if 35 <= self.current_bpm <= 200 else self.last_good_bpm
+        show_hrv = self.current_hrv if 1 <= self.current_hrv <= 2000 else self.last_good_hrv
+        self.bpm_label.text = str(show_bpm) if show_bpm > 0 else "--"
+        self.hrv_label.text = f"HRV: {show_hrv} ms" if show_hrv > 0 else "HRV: -- ms"
 
         if self.diag_status == 'PREPARING':
             self.prep_countdown -= 0.5
             if self.prep_countdown > 0:
                 self.status_label.text = f"基线平复倒数: {int(self.prep_countdown)} 秒"
             else:
-                self.diag_status = 'RUNNING'
-                self.valid_data_ticks = 0
+                self.diag_status, self.valid_data_ticks = 'RUNNING', 0.0
                 self.rhythm_history.clear()
                 self.status_label.text = "状态: 纯净数据抽样中..."
                 self.status_label.color = get_color_from_hex('#D35400')
-                self.advice_box.text = (
-                    "【硬件握手成功】波形稳定入轨，启动内源测录。\n"
-                    f"   {E('👉')} 请持续保持平稳状态，等待进度条走完。"
-                )
+                self.advice_box.text = "【硬件握手成功】波形稳定入轨，启动内源测录。\n" \
+                                       f"   {E('👉')} 请持续保持平稳状态，等待进度条走完。"
             return
 
-        if self.diag_status == 'DONE': return
-
-        if self.current_bpm > 180:
-            self.advice_box.text = f"{E('⚠️')}【高杂波阻滞】捕捉到过激杂音源，数据进度挂起等待排空..."
-            self.valid_data_ticks = max(0, self.valid_data_ticks - 1)
+        if self.diag_status == 'DONE':
+            self.bpm_label.text = str(self.final_bpm) if self.final_bpm > 0 else "--"
+            self.hrv_label.text = f"HRV: {self.final_hrv} ms" if self.final_hrv > 0 else "HRV: -- ms"
             return
 
-        # 【修复3】极度关键：检测不到有效心跳时，卡死进度条！防止收集10次虚假的数值当成健康！
-        if self.current_bpm == 0 or self.current_rhythm == "Wait":
-            self.advice_box.text = f"{E('⚠️')}【等候心动周期】未捕获到有效心跳搏动，检测进度已挂起..."
-            return
+        if self.diag_status == 'RUNNING':
+            if self.current_bpm > 180:
+                self.advice_box.text = f"{E('⚠️')}【高杂波阻滞】捕捉到过激杂音源，数据进度挂起等待排空..."
+                self.valid_data_ticks = max(0, self.valid_data_ticks - 1)
+                return
 
-        self.valid_data_ticks += 0.5
-        if int(self.valid_data_ticks) > len(self.rhythm_history):
-            self.rhythm_history.append(self.current_rhythm)
+            self.valid_data_ticks += 0.5
+            if self.current_rhythm in ("Normal", "AFib", "PVC") and 35 <= self.current_bpm <= 200:
+                if int(self.valid_data_ticks) > len(self.rhythm_history):
+                    self.rhythm_history.append(self.current_rhythm)
 
-        if self.valid_data_ticks <= 10:
-            prog = int((self.valid_data_ticks / 10.0) * 100)
-            self.status_label.text = f"智能深部析出... {prog}%"
-            return
-
-        afib = self.rhythm_history.count("AFib")
-        pvc = self.rhythm_history.count("PVC")
-
-        if afib >= 3:
-            self.status_label.text = "诊断结果: 疑似房颤 (AFib)"
-            self.status_label.color = get_color_from_hex('#c0392b')
-            self.advice_box.text = f"{E('❌')} 【结论快照】捕捉到严重不规律的RR间期序列，强烈疑似心房颤动！"
-            self.show_alert_popup("⚠️ 高危心电异常预警",
-                                  "系统检测到连续的不规则 RR 间期（疑似房颤），\n请立刻持设备就诊查验！")
-
-        elif pvc >= 3:
-            self.status_label.text = "诊断结果: 室性早搏 (PVC)"
-            self.status_label.color = get_color_from_hex('#d35400')
-            self.advice_box.text = f"{E('⚠️')} 【结论快照】捕捉到部分导联的代偿间歇偏移，疑似室性期前收缩(PVC)。"
-            self.show_alert_popup("⚠️ 注意: 节律异常",
-                                  "捕捉到提前漏跳的代偿间歇（早搏），\n偶尔发生属正常现象，若频繁出现请注意休息。")
-
-        else:
-            self.status_label.text = "诊断结果: 正常心律"
-            self.status_label.color = get_color_from_hex('#27ae60')
-            self.advice_box.text = f"{E('✅')} 【结论快照】心房心室起搏平稳健康，周期排查完毕，系统解锁进入恒向守护。"
-
-        self.diag_status = 'DONE'
-        self.btn_diag.disabled = False
-        self.btn_diag.text = "复位并开启全新捕获"
-
-    def trigger_sms_alert(self, msg):
-        now = time.time()
-        if now - self.last_sms_time > 30:
-            self.advice_box.text += f"\n\n{E('🔔')} 【系统分发】异常心动信号已通过后台基站通报管理端。"
-            self.last_sms_time = now
+            if self.valid_data_ticks <= 10:
+                self.status_label.text = f"智能深部析出... {int((self.valid_data_ticks / 10.0) * 100)}%"
+            else:
+                self.finish_diag_logic()
 
     def show_alert_popup(self, title_text, msg_text):
         box = BoxLayout(orientation='vertical', padding=20, spacing=20)
         lbl = Label(text=msg_text, font_name=FONT_NAME, font_size='18sp',
                     color=(1, 1, 1, 1), halign='center', valign='middle')
         lbl.bind(size=lbl.setter('text_size'))
-
         btn = Button(text="确认并关闭", size_hint_y=0.4, font_name=FONT_NAME,
                      font_size='18sp', bold=True, background_color=get_color_from_hex('#e74c3c'))
-
         box.add_widget(lbl)
         box.add_widget(btn)
-
         popup = Popup(title=title_text, content=box, size_hint=(0.7, 0.4),
-                      title_font=FONT_NAME, title_color=(1, 0.2, 0.2, 1),
-                      auto_dismiss=False)
+                      title_font=FONT_NAME, title_color=(1, 0.2, 0.2, 1), auto_dismiss=False)
         btn.bind(on_press=popup.dismiss)
         popup.open()
 
     def on_stop(self):
-        self.hw_thread.stop()
-
+        try:
+            self.hw_thread.stop()
+        except Exception:
+            pass
 
 if __name__ == '__main__':
     ECGApp().run()
