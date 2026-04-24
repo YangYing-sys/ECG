@@ -20,8 +20,10 @@ FONT_NAME = 'simhei.ttf'
 EMOJI_FONT = 'seguiemj.ttf'
 Window.clearcolor = get_color_from_hex('#F9F9F9')
 
+
 def E(ch):
     return f"[font={EMOJI_FONT}]{ch}[/font]"
+
 
 class CSVDataManager:
     def __init__(self):
@@ -86,6 +88,7 @@ class CSVDataManager:
         except Exception:
             pass
 
+
 class RichLogBox(Label):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -106,6 +109,7 @@ class RichLogBox(Label):
         self.bg.pos, self.bg.size = self.pos, self.size
         self.border.rectangle = (self.x, self.y, self.width, self.height)
         self.text_size = (self.width - 30, self.height - 30)
+
 
 class HardwareThread(threading.Thread):
     STATUS_MAP = {"Invalid": 0, "Wait": 1, "Normal": 2, "AFib": 3, "PVC": 4}
@@ -279,7 +283,7 @@ class HardwareThread(threading.Thread):
                 self.emit_status("【错误】设备不支持蓝牙")
                 return False
             if not adapter.isEnabled():
-                self.emit_status("【提示】请先在手机系统里开启蓝牙，并完成 HC-05 配对")
+                self.emit_status("【提示】请先在手机系统里开启蓝牙，并完成 HC-05 配贴")
                 return False
 
             bonded = adapter.getBondedDevices().toArray()
@@ -332,7 +336,8 @@ class HardwareThread(threading.Thread):
             m = self.LINE_PATTERN.match(line)
             if not m:
                 return
-            adc_val, ecg_val, bpm_val, rr_val, hrv_val = int(m.group(1)), float(m.group(2)), int(m.group(3)), int(m.group(4)), int(m.group(5))
+            adc_val, ecg_val, bpm_val, rr_val, hrv_val = int(m.group(1)), float(m.group(2)), int(m.group(3)), int(
+                m.group(4)), int(m.group(5))
             raw_rhythm = self.normalize_rhythm(m.group(6))
             if not (0 <= adc_val <= 4095 and 0 <= bpm_val <= 240 and 0 <= rr_val <= 3000 and 0 <= hrv_val <= 3000):
                 return
@@ -346,7 +351,7 @@ class HardwareThread(threading.Thread):
                 if app and hasattr(app, 'csv_manager'):
                     app.csv_manager.save_data(bpm_val, hrv_val, rhythm)
         except Exception as e:
-            print("parse_line 错误:", e, line)
+            pass
 
     def close_link(self):
         try:
@@ -383,19 +388,19 @@ class ECGPlotWidget(FloatLayout):
         self.ptr = 0
         self.display_mode = 'FLAT'
 
-        # ===== 真正的临床监护仪滤波状态 (Bandpass 0.5-40Hz 模拟) =====
+        # ===== 新加入：极速基线与滤波计算所需的变量 =====
+        self.baseline = 0.0
+        self.last_smoothed = 0.0
+
+        # 保留原有的变量以防其他地方报错
         self.last_val = 0.0
         self.dc_out = 0.0
         self.lp1 = 0.0
         self.lp2 = 0.0
-
-        # 多重抗干扰窗口
-        self.med_buf = deque(maxlen=3)  # 清除硬件极端尖刺
-        self.ma_buf = deque(maxlen=4)  # 抹平肌电细碎高频抖动
-
-        # 线性固定增益 (因为不再强行压缩，增益需要重新匹配)
-        self.fixed_gain = 4.0
-        self.display_gain = 4.0
+        self.med_buf = deque(maxlen=5)
+        self.ma_buf = deque(maxlen=8)
+        self.fixed_gain = 6
+        self.display_gain = 6
 
         with self.canvas.before:
             Color(*get_color_from_hex('#FAFBFC'))
@@ -405,7 +410,6 @@ class ECGPlotWidget(FloatLayout):
             self.canvas.before.add(self.grid_lines)
 
         with self.canvas:
-            # 强化绘制粗细，让质感更接近真实监护仪
             Color(0.91, 0.30, 0.24, 0.12)
             self.glow_line = Line(points=[], width=4.0, cap='round', joint='round')
 
@@ -413,7 +417,7 @@ class ECGPlotWidget(FloatLayout):
             self.mid_line = Line(points=[], width=2.4, cap='round', joint='round')
 
             Color(*get_color_from_hex('#e74c3c'))
-            self.line = Line(points=[], width=1.65, cap='round', joint='round')  # 稍微加粗一点点
+            self.line = Line(points=[], width=1.65, cap='round', joint='round')
 
         self.y_labels = []
         for y_val in [60, 40, 20, 0, -20, -40, -60]:
@@ -491,69 +495,51 @@ class ECGPlotWidget(FloatLayout):
 
         self.plot_rect = (plot_x, plot_y, plot_w, plot_h)
 
+    # ==========================================
+    # 核心重写：极速基线回正 + 智能抗噪低通算法
+    # ==========================================
     def push_data(self, value):
-        raw = float(value)
-        raw = max(-200.0, min(200.0, raw))  # 硬件级防爆音限幅
+        try:
+            raw = float(value)
 
-        # ==========================================
-        #  STEP 1: 中值滤波 (专治硬件单点极端尖刺突破)
-        # ==========================================
-        self.med_buf.append(raw)
-        if len(self.med_buf) < 3:
-            m_val = raw
-        else:
-            m_val = float(np.median(self.med_buf))
+            # --- 1. 初始化级联滤波器 ---
+            if not hasattr(self, 'init_flag') or not self.init_flag:
+                self.dc_trend = raw
+                self.lp1 = 0.0
+                self.lp2 = 0.0
+                self.lp3 = 0.0
+                self.init_flag = True
 
-        # ==========================================
-        #  STEP 2: 均值滤波 (抹平细碎的肌电/工频干扰锯齿)
-        # ==========================================
-        self.ma_buf.append(m_val)
-        ma_val = sum(self.ma_buf) / len(self.ma_buf)
+            # --- 2. 剥离基线大波浪 (高通滤波器) ---
+            # 权重 0.985，锁死 0 刻度线中心位，消除呼吸带来的上下漂移
+            self.dc_trend = self.dc_trend * 0.985 + raw * 0.015
+            ac_val = raw - self.dc_trend
 
-        # ==========================================
-        #  STEP 3: DC Blocker - 超稳高通滤波
-        #  (监护仪核心技术：瞬间去基线漂移，绝无滞后感)
-        # ==========================================
-        self.dc_out = ma_val - self.last_val + 0.992 * self.dc_out
-        self.last_val = ma_val
+            # --- 3. 三级医疗级平滑 (多次轻度打磨取代一次重度碾压) ---
+            # 这三句代码是去毛刺的核心！
+            # 它会将像刺猬一样的杂音“熔化”成一条圆润的线，同时保留高耸的 R 波大山
+            self.lp1 = self.lp1 * 0.5 + ac_val * 0.5
+            self.lp2 = self.lp2 * 0.5 + self.lp1 * 0.5
+            self.lp3 = self.lp3 * 0.5 + self.lp2 * 0.5
 
-        # ==========================================
-        #  STEP 4: 双级巴特沃斯风格平滑 (监护模式低通)
-        #  (只有这种线性算法，才能保留 P、QRS、T 的真实弯曲弧度)
-        # ==========================================
-        alpha = 0.55
-        self.lp1 = alpha * self.lp1 + (1.0 - alpha) * self.dc_out
-        self.lp2 = alpha * self.lp2 + (1.0 - alpha) * self.lp1
+            # --- 4. 补偿放大显示 ---
+            # 因为经过了三道滤网，波形振幅会有所缩减，需要用 4.5 或 5.0 的倍率将其拉拔起来
+            final_value = self.lp3 * 5.0
 
-        # 取出信号，此时是一条非常连续干净的曲线
-        signal = self.lp2
+            # --- 5. 防越界保护 ---
+            if final_value > 80: final_value = 80
+            if final_value < -80: final_value = -80
 
-        # 乘上增益进行显示
-        y = signal * self.display_gain
+            self.ecg_buffer[self.ptr] = final_value
+            self.ptr = (self.ptr + 1) % self.data_len
 
-        # 柔和削峰，保护超出屏幕的极值，避免和方格边框冲突
-        limit = 35.0
-        if abs(y) > limit:
-            s_sign = 1.0 if y > 0 else -1.0
-            y = s_sign * (limit + (abs(y) - limit) * 0.15)
-
-        # 绝对限幅
-        y = max(-50.0, min(50.0, y))
-
-        # 送入画布循环
-        self.ecg_buffer[self.ptr] = y
-        self.ptr = (self.ptr + 1) % self.data_len
+        except Exception:
+            pass
 
     def clear_wave(self):
         self.ecg_buffer[:] = 0
         self.ptr = 0
-        self.last_val = 0.0
-        self.dc_out = 0.0
-        self.lp1 = 0.0
-        self.lp2 = 0.0
-        self.med_buf.clear()
-        self.ma_buf.clear()
-        self.display_gain = self.fixed_gain
+        self.init_flag = False  # 确保点重测时清理历史杂图
 
     def render(self, dt):
         if not hasattr(self, 'plot_rect'):
@@ -585,9 +571,10 @@ class ECGPlotWidget(FloatLayout):
         self.mid_line.points = pts
         self.line.points = pts
 
+
 class ECGApp(App):
     def build(self):
-        self.title = "AI辅助心电预警系统"
+        self.title = "心电预警系统"
 
         self.monitor_started = False
         self.current_adc = 0
@@ -684,7 +671,8 @@ class ECGApp(App):
             (adc_std < 2.0, "ADC几乎无变化，疑似未接入有效信号"),
             ((ecg_pp < 0.8 and ecg_std < 0.25 and self.current_bpm == 0), "ECG几乎无波动且无有效心率，疑似电极脱落"),
             ((ecg_pp > 80 and self.current_bpm == 0), "ECG异常乱跳，疑似电极接触不良"),
-            ((self.current_rhythm == "Wait" and ecg_pp < 1.0 and adc_std < 5.0), "长时间无稳定心律且波形过平，疑似导联异常")
+            ((self.current_rhythm == "Wait" and ecg_pp < 1.0 and adc_std < 5.0),
+             "长时间无稳定心律且波形过平，疑似导联异常")
         ]
         for cond, msg in checks:
             if cond:
@@ -793,7 +781,8 @@ class ECGApp(App):
                 self.status_label.text = "诊断结果: 疑似房颤 (AFib)"
                 self.status_label.color = get_color_from_hex('#c0392b')
                 self.advice_box.text = f"{E('❌')} 【结论快照】捕捉到明显不规则RR间期序列，疑似房颤。"
-                self.show_alert_popup("⚠️ 高危心电异常预警", "系统检测到连续不规则 RR 间期（疑似房颤），\n请及时进一步检查。")
+                self.show_alert_popup("⚠️ 高危心电异常预警",
+                                      "系统检测到连续不规则 RR 间期（疑似房颤），\n请及时进一步检查。")
             elif pvc_cnt >= 4 and pvc_cnt > normal_cnt and pvc_cnt > afib_cnt:
                 self.status_label.text = "诊断结果: 室性早搏 (PVC)"
                 self.status_label.color = get_color_from_hex('#d35400')
@@ -822,7 +811,7 @@ class ECGApp(App):
             elif self.current_status_code == 0 or self.py_lead_off:
                 self.status_label.text, self.status_label.color = "状态: 导联异常", get_color_from_hex('#e74c3c')
             else:
-                self.status_label.text = "状态: 待机就绪" if self.current_rhythm == "Wait" else f"状态: 数据接收正常 ({self.current_rhythm})"
+                self.status_label.text = "状态: 待机就绪" if self.current_rhythm == "Wait" else f"状态: 数据接收正常"
                 self.status_label.color = get_color_from_hex('#555555')
             return
 
@@ -913,6 +902,7 @@ class ECGApp(App):
             self.hw_thread.stop()
         except Exception:
             pass
+
 
 if __name__ == '__main__':
     ECGApp().run()
