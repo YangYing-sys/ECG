@@ -1,7 +1,7 @@
 [app]
 
 # (str) Title of your application
-title = AI心电预警系统
+title = ECG
 
 # (str) Package name
 package.name = ecgapp
@@ -16,7 +16,7 @@ source.dir = .
 source.include_exts = py,png,jpg,kv,atlas,ttf,csv
 
 # (str) Application versioning
-version = 0.1
+version = 0.2
 
 # (list) Application requirements
 # 核心三剑客：numpy (计算), pyserial (串口), pyjnius (调用安卓底层)
