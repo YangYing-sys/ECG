@@ -11,7 +11,7 @@ main = main.py
 version = 1.0
 
 # 你的代码需要的 Python 库依赖
-requirements = python3,kivy==2.3.0,pyjnius,android,pyserial,numpy
+requirements = python3,kivy==2.3.0,pyjnius,android,pyserial,numpy=1.26.4
 
 # 针对 Android 10+ 系统的配置
 android.archs = arm64-v8a
