@@ -6,8 +6,6 @@ on:
 
 jobs:
   build:
-    # 方案一：如果 22.04 依然顽固，很多开发者会切回 20.04（环境更稳）
-    # 但我们先尝试在 22.04 下通过强制参数解决
     runs-on: ubuntu-22.04
 
     steps:
@@ -18,6 +16,15 @@ jobs:
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
+
+      - name: Configure Pip Mirror (Tsinghua)
+        # 用国内清华源加速依赖下载，防止网络波动导致报错
+        run: |
+          mkdir -p ~/.pip
+          echo "[global]" > ~/.pip/pip.conf
+          echo "index-url = https://pypi.tuna.tsinghua.edu.cn/simple/" >> ~/.pip/pip.conf
+          echo "[install]" >> ~/.pip/pip.conf
+          echo "trusted-host = pypi.tuna.tsinghua.edu.cn" >> ~/.pip/pip.conf
 
       - name: Install Android Build Dependencies
         run: |
@@ -31,40 +38,43 @@ jobs:
         run: |
           sudo pip3 install buildozer cython virtualenv
 
-      - name: Repair buildozer.spec and Force Master P4A
+      - name: Repair buildozer.spec (Auto-Fix Version & BOM)
+        # 使用 Python 自动检测并修复 buildozer.spec 中的所有潜在错误
         shell: python
         run: |
           import os
-          # 1. 修复文件编码和格式
           if os.path.exists('buildozer.spec'):
               with open('buildozer.spec', 'rb') as f:
-                  content = f.read().replace(b'\xef\xbb\xbf', b'')
+                  content = f.read().replace(b'\xef\xbb\xbf', b'') # 去除 BOM 头
+              
               text = content.decode('utf-8').strip()
               
-              # 2. 方案二：强制 Buildozer 使用最新的 python-for-android 分支
-              # 这样它会包含对新版 GCC 的兼容性补丁
-              if 'p4a.branch =' in text:
-                  lines = text.split('\n')
-                  new_lines = []
-                  for line in lines:
-                      if line.startswith('p4a.branch'):
-                          new_lines.append('p4a.branch = master')
-                      else:
-                          new_lines.append(line)
-                  text = '\n'.join(new_lines)
+              # 自动将错误的 numpy==2.3.0 替换为支持 Python 3.11 的稳定版 numpy==1.26.4
+              if 'numpy==2.3.0' in text:
+                  print("检测到错误的 numpy 版本，正在自动修复...")
+                  text = text.replace('numpy==2.3.0', 'numpy==1.26.4')
               
               with open('buildozer.spec', 'w', encoding='utf-8') as f:
                   f.write(text)
+              print("buildozer.spec 修复完成！")
+          else:
+              print("警告: 未找到 buildozer.spec 文件！")
 
       - name: Run Buildozer
+        # 使用 env 块，将编译器降级参数牢牢注入到整个编译生命周期
+        env:
+          CC: "gcc -Wno-error=implicit-function-declaration"
+          ac_cv_warn_c99_implicit_function_declaration: "no"
+          APP_CFLAGS: "-Wno-error=implicit-function-declaration"
         run: |
-          # 方案三：【最关键的一步】
-          # 我们不只传 CFLAGS，我们直接修改 CC（编译器命令）
-          # 把“忽略警告”直接焊死在编译器命令里，这样 Makefile 里的参数就无法覆盖它了
-          export CC="gcc -Wno-error=implicit-function-declaration"
-          
-          # 告诉 Python 的 configure 脚本：不要把这个警告当错误（预设缓存变量）
-          export ac_cv_warn_c99_implicit_function_declaration=no
-          
-          # 开始打包
+          # 首次运行前清理缓存以防万一
+          rm -rf ~/.buildozer/
+          # yes y 自动确认所有 Android SDK 许可服务
           yes y | buildozer -v android debug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ECG-App-Download
+          path: bin/*.apk
+          
