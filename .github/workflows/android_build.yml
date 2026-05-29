@@ -19,23 +19,40 @@ jobs:
 
       - name: Install OS & Python deps
         run: |
+          set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y git zip unzip openjdk-17-jdk autoconf libtool pkg-config \
-            zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake libffi-dev libssl-dev \
-            coreutils sed gawk
+          # 显式安装 git、sed、gawk、coreutils（包含 head & yes）及其它依赖
+          sudo apt-get install -y --no-install-recommends \
+            git zip unzip openjdk-17-jdk autoconf libtool pkg-config \
+            zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake \
+            libffi-dev libssl-dev coreutils sed gawk ca-certificates curl
           python -m pip install --upgrade pip
           python -m pip install --user --upgrade buildozer cython virtualenv
+
+      - name: Verify installed utilities
+        run: |
+          set -euo pipefail
+          echo "Verify basic utilities:"
+          which sed || { echo "sed not found"; exit 1; }
+          sed --version | head -n 1
+          which awk || { echo "awk not found"; exit 1; }
+          awk --version 2>&1 | head -n 1
+          which head || { echo "head not found"; exit 1; }
+          head --version 2>&1 || true
+          which git || { echo "git not found"; exit 1; }
+          git --version
 
       - name: Clean buildozer.spec & Build APK
         env:
           PATH: ${{ env.PATH }}:~/.local/bin
         run: |
+          set -euo pipefail
           export PATH=$PATH:~/.local/bin
           # 删除可能的 UTF-8 BOM（会导致 configparser MissingSectionHeaderError）
           sed -i '1s/^\xEF\xBB\xBF//' buildozer.spec || true
           # 删除文件开头的所有空行，确保第一行就是 [app]
           awk 'BEGIN{p=0} {if(p==0 && $0 ~ /^\s*$/) next; p=1; print}' buildozer.spec > buildozer.spec.tmp && mv buildozer.spec.tmp buildozer.spec
-          # 显示前几行帮助排查（可删除）
+          # 显示前几行帮助排查（可以看到是否以 [app] 开头）
           head -n 8 buildozer.spec
           # 使用 yes（coreutils 已安装）自动确认所有提示
           yes y | buildozer -v android debug
