@@ -12,40 +12,41 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Use Python 3.11
+      - name: Set up Python 3.11
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
 
-      - name: Install OS & Python deps
+      - name: Install Operating System Dependencies
+        # 这里系统环境变量是正常的，可以正常执行指令
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             git zip unzip openjdk-17-jdk autoconf libtool pkg-config \
             zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake \
             libffi-dev libssl-dev coreutils ca-certificates curl
+
+      - name: Install Buildozer and Dependencies
+        run: |
           python -m pip install --upgrade pip
           python -m pip install --user --upgrade buildozer cython virtualenv
+          # 使用官方推荐方式将 buildozer 路径加入系统路径，而不破坏原有的 PATH
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
 
-      - name: Fix spec and Build APK
-        env:
-          PATH: ${{ env.PATH }}:~/.local/bin
+      - name: Build APK with Buildozer
         run: |
-          export PATH=$PATH:~/.local/bin
-
-          # 1. 彻底清除 buildozer.spec 中可能存在的 UTF-8 BOM 头
-          sed -i 's/\xEF\xBB\xBF//g' buildozer.spec
-
-          # 2. 自动删除所有前导空行，确保首行必定为 [app]
-          sed -i '/./,$!d' buildozer.spec
-
-          # 3. 打印前 5 行用于在日志中肉眼确认格式
-          head -n 5 buildozer.spec
-
-          # 4. 开始打包程序
+          # 1. 修复 buildozer.spec 的格式（BOM头和空行）
+          # 我们不再使用环境变量覆盖，直接调用原生命令
+          /usr/bin/sed -i 's/\xEF\xBB\xBF//g' buildozer.spec
+          /usr/bin/sed -i '/./,$!d' buildozer.spec
+          
+          # 2. 打印确认一下 spec 文件首行，防止 debug
+          head -n 3 buildozer.spec
+          
+          # 3. 开始打包，使用 yes 自动跳过所有协议确认
           yes y | buildozer -v android debug
 
-      - name: Upload APK
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: ECG-App-Download
