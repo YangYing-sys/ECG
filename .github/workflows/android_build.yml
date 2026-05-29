@@ -17,8 +17,14 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install Operating System Dependencies
-        # 这里系统环境变量是正常的，可以正常执行指令
+      # 这一步是为了向你证明：系统里绝对是有 git 的
+      - name: Verify System Tools
+        run: |
+          which git
+          which sed
+          git --version
+
+      - name: Install Android Build Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -26,27 +32,32 @@ jobs:
             zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake \
             libffi-dev libssl-dev coreutils ca-certificates curl
 
-      - name: Install Buildozer and Dependencies
+      - name: Install Buildozer (Global)
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install --user --upgrade buildozer cython virtualenv
-          # 使用官方推荐方式将 buildozer 路径加入系统路径，而不破坏原有的 PATH
-          echo "$HOME/.local/bin" >> $GITHUB_PATH
+          # 放弃 --user 模式，直接安装到全局，确保 buildozer 命令直接可用
+          sudo pip3 install buildozer cython virtualenv
 
-      - name: Build APK with Buildozer
+      - name: Repair buildozer.spec (Python Way)
+        # 用 Python 直接重写文件，不调用任何 shell 命令，彻底杜绝特殊字符报错
+        shell: python
         run: |
-          # 1. 修复 buildozer.spec 的格式（BOM头和空行）
-          # 我们不再使用环境变量覆盖，直接调用原生命令
-          /usr/bin/sed -i 's/\xEF\xBB\xBF//g' buildozer.spec
-          /usr/bin/sed -i '/./,$!d' buildozer.spec
-          
-          # 2. 打印确认一下 spec 文件首行，防止 debug
-          head -n 3 buildozer.spec
-          
-          # 3. 开始打包，使用 yes 自动跳过所有协议确认
+          import os
+          content = open('buildozer.spec', 'rb').read()
+          # 强行剥离 Windows 带来的 BOM 头
+          if content.startswith(b'\xef\xbb\xbf'):
+              content = content[3:]
+          # 去掉首尾多余空格，确保 [app] 是第一个字符
+          clean_text = content.decode('utf-8').strip()
+          with open('buildozer.spec', 'w', encoding='utf-8') as f:
+              f.write(clean_text)
+
+      - name: Run Buildozer
+        run: |
+          # 使用绝对路径强制执行，或者直接执行（因为前面已经加了 sudo 安装）
+          # yes y 是为了自动同意 Android SDK 的各种许可协议
           yes y | buildozer -v android debug
 
-      - name: Upload Artifact
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: ECG-App-Download
