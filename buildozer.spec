@@ -1,34 +1,39 @@
 [app]
-# 应用名称和包名
-title = ECG Assist System
-package.name = ecg_app
-package.domain = com.ai.ecg
+# (string) 应用的显示名称
+title = AI ECG System
 
-# 源代码目录和文件过滤清单
+# (string) 包名
+package.name = aiecgapp
+
+# (string) 域（用于生成包名，例如 com.ai.aiecgapp）
+package.domain = com.ai
+
+# (string) 源代码所在目录（. 代表当前目录）
 source.dir = .
+
+# (list) 包含的文件后缀，必须包含 ttf 字体才能正常显示中文和表情
 source.include_exts = py,png,jpg,kv,atlas,ttf
 
-# 核心依赖项设置 (包含 numpy, pyserial 串口, pyjnius 底层调用)
+# ====== 修复关键点：添加版本号 ======
+version = 0.1
+
+# (list) 你的代码中所引用的依赖库
+# 注意：numpy 编译较慢，第一次打包需要耐心等待
 requirements = python3,kivy,numpy,pyserial,pyjnius
 
-# 屏幕方向 (可以设置为 landscape, portrait 或 all)
+# (string) 屏幕方向
 orientation = portrait
 
-# 对应高版本 Android/HarmonyOS 的系统权限申请
-# 包含读写闪存和蓝牙连接、蓝牙搜索权限
+# (list) 华为 MatePad 平板调试蓝牙和存储所需的权限
 android.permissions = WRITE_EXTERNAL_STORAGE, READ_EXTERNAL_STORAGE, BLUETOOTH, BLUETOOTH_ADMIN, BLUETOOTH_CONNECT, BLUETOOTH_SCAN, INTERNET
 
-# 目标 Android API 版本 (HarmonyOS 4/基于 Android 12-13，建议设置 33)
+# (int) 目标 Android API，这里设为 33 (兼容 HarmonyOS 4)
 android.api = 33
 android.minapi = 21
 android.ndk_api = 21
 
-# 打包架构类型：华为 MatePad Pro 11 采用骁龙系列 64 位芯片，必须支持 arm64-v8a
+# (list) 华为 MatePad 等现代设备的 CPU 架构
 android.archs = arm64-v8a
-
-# 自适应启动图与图标配置 (可维持默认)
-icon.filename = %(source.dir)s/icon.png
-# 如果没有icon.png，可以先注释该行，buildozer 会使用默认图标
 
 [buildozer]
 log_level = 2
