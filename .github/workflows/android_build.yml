@@ -1,8 +1,8 @@
 name: Build Android APK
 on:
   push:
-    branches: [ main ]  # 当你向 main 分支推送代码时自动打包
-  workflow_dispatch:     # 支持手动在 GitHub 点击按钮触发打包
+    branches: [ main ]
+  workflow_dispatch:
 
 jobs:
   build:
@@ -14,10 +14,8 @@ jobs:
 
       - name: Get Date
         id: get-date
-        run: |
-          echo "date=$(date +'%Y-%m-%d')" >> "$GITHUB_OUTPUT"
+        run: echo "date=$(date +'%Y-%m-%d')" >> "$GITHUB_OUTPUT"
 
-      # 缓存 Buildozer 下载的 Android SDK/NDK 依赖，使后续打包速度极快
       - name: Buildozer Cache
         uses: actions/cache@v4
         with:
@@ -28,13 +26,12 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-buildozer-
 
-      # 采用 Github 社区稳定的 Buildozer Action
+      # ✅ 关键修正：使用正确的 Action 版本（v1.0.1，而不是 v2）
       - name: Build with Buildozer
-        uses: TomerBG2/buildozer-action@v2
+        uses: TomerBG2/buildozer-action@v1.0.1
         with:
           buildozer_version: stable
 
-      # 编译完成后，将生成的 APK 提取出来作为制成品供下载
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
