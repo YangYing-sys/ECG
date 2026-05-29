@@ -17,13 +17,6 @@ jobs:
         with:
           python-version: '3.11'
 
-      # 这一步是为了向你证明：系统里绝对是有 git 的
-      - name: Verify System Tools
-        run: |
-          which git
-          which sed
-          git --version
-
       - name: Install Android Build Dependencies
         run: |
           sudo apt-get update
@@ -34,28 +27,33 @@ jobs:
 
       - name: Install Buildozer (Global)
         run: |
-          # 放弃 --user 模式，直接安装到全局，确保 buildozer 命令直接可用
+          # 这样安装能确保 buildozer 命令全局可用
           sudo pip3 install buildozer cython virtualenv
 
-      - name: Repair buildozer.spec (Python Way)
-        # 用 Python 直接重写文件，不调用任何 shell 命令，彻底杜绝特殊字符报错
+      - name: Repair buildozer.spec
         shell: python
         run: |
           import os
-          content = open('buildozer.spec', 'rb').read()
-          # 强行剥离 Windows 带来的 BOM 头
-          if content.startswith(b'\xef\xbb\xbf'):
-              content = content[3:]
-          # 去掉首尾多余空格，确保 [app] 是第一个字符
-          clean_text = content.decode('utf-8').strip()
-          with open('buildozer.spec', 'w', encoding='utf-8') as f:
-              f.write(clean_text)
+          if os.path.exists('buildozer.spec'):
+              with open('buildozer.spec', 'rb') as f:
+                  content = f.read()
+              if content.startswith(b'\xef\xbb\xbf'):
+                  content = content[3:]
+              clean_text = content.decode('utf-8').strip()
+              with open('buildozer.spec', 'w', encoding='utf-8') as f:
+                  f.write(clean_text)
 
       - name: Run Buildozer
         run: |
-          # 使用绝对路径强制执行，或者直接执行（因为前面已经加了 sudo 安装）
-          # yes y 是为了自动同意 Android SDK 的各种许可协议
+          # 核心修复方案：强制降低编译器的严苛程度，忽略 implicit-function-declaration 错误
+          # 同时添加 CFLAGS 环境变量，这是解决 hostpython3 编译失败的通用办法
+          export CFLAGS="-Wno-implicit-function-declaration"
+          export CXXFLAGS="-Wno-implicit-function-declaration"
+          
           yes y | buildozer -v android debug
+        env:
+          # 有些版本的 p4a 需要通过这个方式传递参数
+          APP_CFLAGS: "-Wno-error=implicit-function-declaration"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
