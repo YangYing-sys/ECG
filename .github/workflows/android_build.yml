@@ -6,6 +6,8 @@ on:
 
 jobs:
   build:
+    # 方案一：如果 22.04 依然顽固，很多开发者会切回 20.04（环境更稳）
+    # 但我们先尝试在 22.04 下通过强制参数解决
     runs-on: ubuntu-22.04
 
     steps:
@@ -27,36 +29,42 @@ jobs:
 
       - name: Install Buildozer (Global)
         run: |
-          # 这样安装能确保 buildozer 命令全局可用
           sudo pip3 install buildozer cython virtualenv
 
-      - name: Repair buildozer.spec
+      - name: Repair buildozer.spec and Force Master P4A
         shell: python
         run: |
           import os
+          # 1. 修复文件编码和格式
           if os.path.exists('buildozer.spec'):
               with open('buildozer.spec', 'rb') as f:
-                  content = f.read()
-              if content.startswith(b'\xef\xbb\xbf'):
-                  content = content[3:]
-              clean_text = content.decode('utf-8').strip()
+                  content = f.read().replace(b'\xef\xbb\xbf', b'')
+              text = content.decode('utf-8').strip()
+              
+              # 2. 方案二：强制 Buildozer 使用最新的 python-for-android 分支
+              # 这样它会包含对新版 GCC 的兼容性补丁
+              if 'p4a.branch =' in text:
+                  lines = text.split('\n')
+                  new_lines = []
+                  for line in lines:
+                      if line.startswith('p4a.branch'):
+                          new_lines.append('p4a.branch = master')
+                      else:
+                          new_lines.append(line)
+                  text = '\n'.join(new_lines)
+              
               with open('buildozer.spec', 'w', encoding='utf-8') as f:
-                  f.write(clean_text)
+                  f.write(text)
 
       - name: Run Buildozer
         run: |
-          # 核心修复方案：强制降低编译器的严苛程度，忽略 implicit-function-declaration 错误
-          # 同时添加 CFLAGS 环境变量，这是解决 hostpython3 编译失败的通用办法
-          export CFLAGS="-Wno-implicit-function-declaration"
-          export CXXFLAGS="-Wno-implicit-function-declaration"
+          # 方案三：【最关键的一步】
+          # 我们不只传 CFLAGS，我们直接修改 CC（编译器命令）
+          # 把“忽略警告”直接焊死在编译器命令里，这样 Makefile 里的参数就无法覆盖它了
+          export CC="gcc -Wno-error=implicit-function-declaration"
           
+          # 告诉 Python 的 configure 脚本：不要把这个警告当错误（预设缓存变量）
+          export ac_cv_warn_c99_implicit_function_declaration=no
+          
+          # 开始打包
           yes y | buildozer -v android debug
-        env:
-          # 有些版本的 p4a 需要通过这个方式传递参数
-          APP_CFLAGS: "-Wno-error=implicit-function-declaration"
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: ECG-App-Download
-          path: bin/*.apk
