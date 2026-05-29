@@ -8,24 +8,35 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
+    # 在 job 里直接使用官方的 prebuilt image，避免构建 action 的 Dockerfile
+    container:
+      image: kivy/buildozer:latest
+
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Build with Buildozer
-        id: buildozer
-        # 使用官方/推荐的 action tag（避免找不到 main 或不存在的 v1.0.1）
-        uses: ArtemSBulgakov/buildozer-action@v1
-        with:
-          # 如果 buildozer.spec 在仓库根目录，repository_root 与 workdir 可维持默认 (.) 
-          # 明确填写以免歧义
-          repository_root: .
-          workdir: .
-          buildozer_version: stable
+      - name: Ensure python & pip up to date
+        run: |
+          python3 -V
+          pip3 install --upgrade pip
+
+      - name: (optional) Install/upgrade buildozer if needed
+        # 某些 image 已含 buildozer，你可以保留或去掉这步
+        run: pip3 install --upgrade buildozer
+
+      - name: Run Buildozer (android debug)
+        # 根据你的项目结构调整 workdir 与命令
+        run: |
+          cd $GITHUB_WORKSPACE
+          # 清理旧产物（可选）
+          rm -rf .buildozer bin
+          # 运行打包（按需改成 `buildozer -v android debug`）
+          buildozer android debug
 
       - name: Upload APK artifact
+        # 打包完成后把 APK 上传为 artifact（路径根据 buildozer 输出调整）
         uses: actions/upload-artifact@v4
         with:
           name: ECG-App-Download
-          # 该 action 会把生成包路径输出为 steps.buildozer.outputs.filename
-          path: ${{ steps.buildozer.outputs.filename }}
+          path: bin/*.apk
