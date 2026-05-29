@@ -20,10 +20,8 @@ jobs:
 
       - name: Build APK (Fully Automated)
         run: |
-          # 将 python pip 安装目录加入环境变量
           export PATH=$PATH:~/.local/bin/
-          
-          # 使用 "yes y |" 这个原生技巧，只要中途碰到任何确认选项，全部自动秒选 'y'！
+          # 自动同意所有协议和警告，遇到询问自动回 y
           yes y | buildozer -v android debug
 
       - name: Upload APK
