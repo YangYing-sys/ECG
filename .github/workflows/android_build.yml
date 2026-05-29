@@ -21,40 +21,62 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          # 显式安装 git、sed、gawk、coreutils（包含 head & yes）及其它依赖
           sudo apt-get install -y --no-install-recommends \
             git zip unzip openjdk-17-jdk autoconf libtool pkg-config \
             zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake \
-            libffi-dev libssl-dev coreutils sed gawk ca-certificates curl
+            libffi-dev libssl-dev coreutils ca-certificates curl
           python -m pip install --upgrade pip
           python -m pip install --user --upgrade buildozer cython virtualenv
 
-      - name: Verify installed utilities
+      - name: Verify basic tools
         run: |
           set -euo pipefail
-          echo "Verify basic utilities:"
-          which sed || { echo "sed not found"; exit 1; }
-          sed --version | head -n 1
-          which awk || { echo "awk not found"; exit 1; }
-          awk --version 2>&1 | head -n 1
-          which head || { echo "head not found"; exit 1; }
-          head --version 2>&1 || true
-          which git || { echo "git not found"; exit 1; }
-          git --version
+          echo "git:" $(git --version)
+          echo "python:" $(python --version)
+          echo "pip:" $(python -m pip --version)
+          echo "~/.local/bin in PATH:" $PATH
 
-      - name: Clean buildozer.spec & Build APK
+      - name: Clean buildozer.spec with Python and Build APK
         env:
           PATH: ${{ env.PATH }}:~/.local/bin
         run: |
           set -euo pipefail
           export PATH=$PATH:~/.local/bin
-          # 删除可能的 UTF-8 BOM（会导致 configparser MissingSectionHeaderError）
-          sed -i '1s/^\xEF\xBB\xBF//' buildozer.spec || true
-          # 删除文件开头的所有空行，确保第一行就是 [app]
-          awk 'BEGIN{p=0} {if(p==0 && $0 ~ /^\s*$/) next; p=1; print}' buildozer.spec > buildozer.spec.tmp && mv buildozer.spec.tmp buildozer.spec
-          # 显示前几行帮助排查（可以看到是否以 [app] 开头）
-          head -n 8 buildozer.spec
-          # 使用 yes（coreutils 已安装）自动确认所有提示
+          # Use Python to remove BOM and leading blank lines (no sed/awk/head needed)
+          python - <<'PY'
+import sys, io, os
+fn = 'buildozer.spec'
+if not os.path.exists(fn):
+    print(f'ERROR: {fn} not found in repo root', file=sys.stderr)
+    sys.exit(1)
+with open(fn, 'rb') as f:
+    b = f.read()
+# Remove UTF-8 BOM if present
+if b.startswith(b'\xef\xbb\xbf'):
+    b = b[3:]
+# Decode and remove leading blank lines
+s = b.decode('utf-8', errors='replace')
+lines = s.splitlines()
+# drop leading empty/whitespace-only lines
+i = 0
+while i < len(lines) and lines[i].strip() == '':
+    i += 1
+out = '\n'.join(lines[i:]) + ('\n' if not s.endswith('\n') else '')
+# Basic sanity check: first non-empty char should be '[' for [app] section
+if not out.lstrip().startswith('['):
+    print('WARNING: buildozer.spec does not start with [ — buildozer may fail', file=sys.stderr)
+with open(fn, 'w', encoding='utf-8') as f:
+    f.write(out)
+print('buildozer.spec cleaned')
+PY
+          # 显示前 8 行以便排查
+          python - <<'PY'
+with open('buildozer.spec','r',encoding='utf-8') as f:
+    for i,l in enumerate(f):
+        if i>=8: break
+        print(f"{i+1:2d}: {l.rstrip()[:200]}")
+PY
+          # Build (use yes to auto-confirm)
           yes y | buildozer -v android debug
 
       - name: Upload APK
