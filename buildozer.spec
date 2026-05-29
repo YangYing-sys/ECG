@@ -1,68 +1,35 @@
 [app]
+# 应用名称和包名
+title = ECG Assist System
+package.name = ecg_app
+package.domain = com.ai.ecg
 
-# (str) Title of your application
-title = 智能心电监测系统
-
-# (str) Package name
-package.name = ecgapp
-
-# (str) Package domain (needed for android packaging)
-package.domain = org.yangying
-
-# (str) Source code where the main.py live
+# 源代码目录和文件过滤清单
 source.dir = .
+source.include_exts = py,png,jpg,kv,atlas,ttf
 
-# (list) Source files to include
-source.include_exts = py,png,jpg,kv,atlas,ttf,csv
+# 核心依赖项设置 (包含 numpy, pyserial 串口, pyjnius 底层调用)
+requirements = python3,kivy,numpy,pyserial,pyjnius
 
-# (str) Application versioning
-version = 1.0.0
-
-# (list) Application requirements
-# kivy 版本建议锁定稳定版，添加 plyer 用于文件访问
-requirements = python3,kivy==2.2.1,numpy,pyserial,pyjnius,android,plyer
-
-# (list) Supported orientations
+# 屏幕方向 (可以设置为 landscape, portrait 或 all)
 orientation = portrait
 
-# (list) Permissions
-# Android 12+ 蓝牙权限需要分开声明
-android.permissions = WRITE_EXTERNAL_STORAGE, READ_EXTERNAL_STORAGE, BLUETOOTH, BLUETOOTH_ADMIN, BLUETOOTH_SCAN, BLUETOOTH_CONNECT, ACCESS_FINE_LOCATION, ACCESS_COARSE_LOCATION, INTERNET
+# 对应高版本 Android/HarmonyOS 的系统权限申请
+# 包含读写闪存和蓝牙连接、蓝牙搜索权限
+android.permissions = WRITE_EXTERNAL_STORAGE, READ_EXTERNAL_STORAGE, BLUETOOTH, BLUETOOTH_ADMIN, BLUETOOTH_CONNECT, BLUETOOTH_SCAN, INTERNET
 
-# (int) Target Android API
+# 目标 Android API 版本 (HarmonyOS 4/基于 Android 12-13，建议设置 33)
 android.api = 33
-
-# (int) Minimum API (Android 5.0+，兼容更多设备)
 android.minapi = 21
+android.ndk_api = 21
 
-# (int) Target SDK version
-android.target_sdk = 33
-
-# (list) Android architectures
+# 打包架构类型：华为 MatePad Pro 11 采用骁龙系列 64 位芯片，必须支持 arm64-v8a
 android.archs = arm64-v8a
 
-# (bool) enables Android auto backup feature
-android.allow_backup = True
-
-# (str) python-for-android branch to use
-p4a.branch = master
-
-# (str) Android NDK version
-android.ndk = 23b
-
-# (str) Android SDK version
-android.sdk = 30
-
-# (list) Gradle dependencies for Bluetooth (可选，提高蓝牙稳定性)
-android.gradle_dependencies = 'com.android.support:support-v4:28.0.0'
-
-# (bool) If True, try to download prebuilt packages for Android (加速打包)
-android.freshen_requirements = True
+# 自适应启动图与图标配置 (可维持默认)
+icon.filename = %(source.dir)s/icon.png
+# 如果没有icon.png，可以先注释该行，buildozer 会使用默认图标
 
 [buildozer]
-
-# (int) Log level (2 输出详细日志)
 log_level = 2
-
-# (int) Display warning if buildozer is run as root
-warn_on_root = 0
+warn_on_root = 1
