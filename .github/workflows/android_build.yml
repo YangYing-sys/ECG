@@ -12,28 +12,14 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Get Date
-        id: get-date
-        run: echo "date=$(date +'%Y-%m-%d')" >> "$GITHUB_OUTPUT"
-
-      - name: Buildozer Cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.buildozer
-            .buildozer
-          key: ${{ runner.os }}-buildozer-${{ steps.get-date.outputs.date }}
-          restore-keys: |
-            ${{ runner.os }}-buildozer-
-
-      # ⭐ 核心修复在这里：必须使用 v1.0.1，不能用 v2
       - name: Build with Buildozer
-        uses: TomerBG2/buildozer-action@v1.0.1
+        # ✅ 修正了版本号，确保能正常执行
+        uses: TomerBG2/buildozer-action@main
         with:
           buildozer_version: stable
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: ECG-App-Debug-APK
+          name: ECG-App-Download
           path: bin/*.apk
