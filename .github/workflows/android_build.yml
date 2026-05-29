@@ -21,7 +21,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y git zip unzip openjdk-17-jdk autoconf libtool pkg-config \
-            zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake libffi-dev libssl-dev coreutils
+            zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake libffi-dev libssl-dev \
+            coreutils sed gawk
           python -m pip install --upgrade pip
           python -m pip install --user --upgrade buildozer cython virtualenv
 
@@ -34,6 +35,7 @@ jobs:
           sed -i '1s/^\xEF\xBB\xBF//' buildozer.spec || true
           # 删除文件开头的所有空行，确保第一行就是 [app]
           awk 'BEGIN{p=0} {if(p==0 && $0 ~ /^\s*$/) next; p=1; print}' buildozer.spec > buildozer.spec.tmp && mv buildozer.spec.tmp buildozer.spec
+          # 显示前几行帮助排查（可删除）
           head -n 8 buildozer.spec
           # 使用 yes（coreutils 已安装）自动确认所有提示
           yes y | buildozer -v android debug
