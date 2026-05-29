@@ -26,7 +26,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-buildozer-
 
-      # ✅ 关键修正：使用正确的 Action 版本（v1.0.1，而不是 v2）
+      # ⭐ 核心修复在这里：必须使用 v1.0.1，不能用 v2
       - name: Build with Buildozer
         uses: TomerBG2/buildozer-action@v1.0.1
         with:
