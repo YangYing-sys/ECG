@@ -1,62 +1,78 @@
 [app]
-# (str) Title of your application
-title = ECG App
 
-# (str) Package name
+# (str) Application title
+title = 智能心电监测系统
+
+# (str) Package name (no spaces, lowercase)
 package.name = ecgapp
 
-# (str) Package domain (needed for android packaging)
-package.domain = org.test
+# (str) Package domain
+package.domain = org.yangying
 
-# (str) Source code where the main.py live
+# (str) Source code directory
 source.dir = .
 
-# (list) Source files to include (let empty to include all the files)
-source.include_exts = py,png,jpg,kv,atlas,ttf
+# (list) File extensions to include
+source.include_exts = py,png,jpg,kv,atlas,ttf,csv
 
-# (str) Application versioning (method 1)
-version = 0.1
+# (str) Application version
+version = 1.0.0
 
-# (list) Application requirements
-# ✅ 包含你代码中所有的库：kivy, numpy, pyserial
-# ✅ pyjnius 是安卓调用系统功能必须的
-requirements = python3,kivy==2.3.0,numpy,pyserial,pyjnius
+# (list) Python requirements
+requirements = python3,kivy==2.2.1,numpy,pyserial,pyjnius,android,plyer
 
-# (str) Supported orientations (landscape, sensorLandscape, portrait or all)
-orientation = landscape
+# (str) Presplash image (optional)
+# presplash.filename = %(source.dir)s/presplash.png
 
-# (bool) Indicate if the application should be fullscreen or not
-fullscreen = 1
+# (str) Icon image (optional)
+# icon.filename = %(source.dir)s/icon.png
 
-# (list) Permissions
-# ✅ 申请了蓝牙和文件读写权限（用于串口通讯和保存CSV）
-android.permissions = BLUETOOTH, BLUETOOTH_ADMIN, BLUETOOTH_CONNECT, BLUETOOTH_SCAN, INTERNET, WRITE_EXTERNAL_STORAGE, READ_EXTERNAL_STORAGE
+# (list) Supported orientations
+orientation = portrait
 
-# (int) Target Android API, should be as high as possible.
+# (bool) Fullscreen mode
+fullscreen = 0
+
+# (list) Android permissions
+android.permissions = WRITE_EXTERNAL_STORAGE, READ_EXTERNAL_STORAGE, BLUETOOTH, BLUETOOTH_ADMIN, BLUETOOTH_SCAN, BLUETOOTH_CONNECT, ACCESS_FINE_LOCATION, ACCESS_COARSE_LOCATION, INTERNET
+
+# (int) Target Android API level
 android.api = 33
 
-# (int) Minimum API your APK will support.
+# (int) Minimum Android API level
 android.minapi = 21
 
-# (int) Android SDK version to use
-android.sdk = 33
+# (int) Target SDK version
+android.target_sdk = 33
 
-# (str) Android NDK version to use
-android.ndk = 25b
+# (list) Android architectures to build
+android.archs = arm64-v8a
 
-# (bool) Use --private data storage (True) or --dir public storage (False)
-android.private_storage = True
-
-# (list) The Android archs to build for, choices: armeabi-v7a, arm64-v8a, x86, x86_64
-# ✅ 华为平板推荐包含 arm64-v8a
-android.archs = arm64-v8a, armeabi-v7a
-
-# (bool) enables Android auto backup feature (OS >= 6.0)
+# (bool) Enable Android backup
 android.allow_backup = True
 
+# (str) Python-for-Android branch
+p4a.branch = master
+
+# (str) Android NDK version
+android.ndk = 23b
+
+# (str) Android SDK version
+android.sdk = 30
+
+# (bool) Auto accept SDK license
+android.accept_sdk_license = True
+
+# (bool) Freshen requirements
+android.freshen_requirements = True
+
+# (list) Gradle dependencies (optional)
+# android.gradle_dependencies = 'com.android.support:support-v4:28.0.0'
+
 [buildozer]
-# (int) Log level (0 = error only, 1 = info, 2 = debug (with command output))
+
+# (int) Log level (0=error,1=warn,2=info,3=debug)
 log_level = 2
 
-# (int) Display warning if buildozer is run as root (0 = off, 1 = on)
-warn_on_root = 1
+# (bool) Warn if running as root
+warn_on_root = 0
