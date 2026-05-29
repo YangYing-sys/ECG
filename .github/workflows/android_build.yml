@@ -20,18 +20,23 @@ jobs:
       - name: Install OS & Python deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y zip unzip openjdk-17-jdk autoconf libtool pkg-config zlib1g-dev \
-            libncurses5-dev libncursesw5-dev libtinfo5 cmake libffi-dev libssl-dev
+          sudo apt-get install -y zip unzip openjdk-17-jdk autoconf libtool pkg-config \
+            zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake libffi-dev libssl-dev coreutils
           python -m pip install --upgrade pip
           python -m pip install --user --upgrade buildozer cython virtualenv
 
-      - name: Build APK (Fully Automated)
+      - name: Clean buildozer.spec & Build APK
         env:
-          PATH: ${{ env.PATH }}:${{ github.workspace }}/.local/bin:~/.local/bin
+          PATH: ${{ env.PATH }}:~/.local/bin
         run: |
-          # Ensure pip user bin is in PATH for this step
           export PATH=$PATH:~/.local/bin
-          # 使用 python 3.11 的 buildozer，遇到询问自动回 y
+          # 删除可能的 UTF-8 BOM（会导致 configparser MissingSectionHeaderError）
+          sed -i '1s/^\xEF\xBB\xBF//' buildozer.spec || true
+          # 删除文件开头的所有空行，确保第一行就是 [app]
+          awk 'BEGIN{p=0} {if(p==0 && $0 ~ /^\s*$/) next; p=1; print}' buildozer.spec > buildozer.spec.tmp && mv buildozer.spec.tmp buildozer.spec
+          # 显示前几行帮助排查（可删除）
+          head -n 8 buildozer.spec
+          # 使用 yes（coreutils 已安装）自动确认所有提示
           yes y | buildozer -v android debug
 
       - name: Upload APK
