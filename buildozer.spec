@@ -24,7 +24,7 @@ source.include_exts = py,png,jpg,kv,atlas,ttf
 version = 1.0
 
 # 必须的 Python 依赖 (如果需要加其他库放在这里，用逗号隔开)
-requirements = python3,kivy==2.3.0,numpy,pyserial,pyjnius
+requirements = python3=3.10,kivy==2.3.0,numpy,pyserial,pyjnius
 
 # 屏幕方向
 orientation = portrait
