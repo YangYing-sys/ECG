@@ -1,78 +1,51 @@
 [app]
+# (str) Title of your application
+title = ECG App
 
-# (str) Application title
-title = 智能心电监测系统
-
-# (str) Package name (no spaces, lowercase)
+# (str) Package name
 package.name = ecgapp
 
-# (str) Package domain
-package.domain = org.yangying
+# (str) Package domain (needed for android packaging)
+package.domain = org.test
 
-# (str) Source code directory
+# (str) Source code where the main.py live
 source.dir = .
 
-# (list) File extensions to include
-source.include_exts = py,png,jpg,kv,atlas,ttf,csv
+# (list) Source files to include (leave empty to include all files)
+source.include_exts = py,png,jpg,kv,atlas,ttf
 
-# (str) Application version
-version = 1.0.0
+# (str) Application versioning
+version = 0.1
 
-# (list) Python requirements
-requirements = python3,kivy==2.2.1,numpy,pyserial,pyjnius,android,plyer
+# (list) Application requirements
+requirements = python3,kivy==2.3.0,numpy,pyserial,pyjnius
 
-# (str) Presplash image (optional)
-# presplash.filename = %(source.dir)s/presplash.png
+# (str) Supported orientations
+orientation = landscape
 
-# (str) Icon image (optional)
-# icon.filename = %(source.dir)s/icon.png
+# (bool) Fullscreen
+fullscreen = 1
 
-# (list) Supported orientations
-orientation = portrait
+# (list) Permissions
+android.permissions = BLUETOOTH, BLUETOOTH_ADMIN, BLUETOOTH_CONNECT, BLUETOOTH_SCAN, INTERNET, WRITE_EXTERNAL_STORAGE, READ_EXTERNAL_STORAGE
 
-# (bool) Fullscreen mode
-fullscreen = 0
-
-# (list) Android permissions
-android.permissions = WRITE_EXTERNAL_STORAGE, READ_EXTERNAL_STORAGE, BLUETOOTH, BLUETOOTH_ADMIN, BLUETOOTH_SCAN, BLUETOOTH_CONNECT, ACCESS_FINE_LOCATION, ACCESS_COARSE_LOCATION, INTERNET
-
-# (int) Target Android API level
+# (int) Target Android API
 android.api = 33
-
-# (int) Minimum Android API level
 android.minapi = 21
-
-# (int) Target SDK version
-android.target_sdk = 33
-
-# (list) Android architectures to build
-android.archs = arm64-v8a
-
-# (bool) Enable Android backup
-android.allow_backup = True
-
-# (str) Python-for-Android branch
-p4a.branch = master
+android.sdk = 33
 
 # (str) Android NDK version
-android.ndk = 23b
+android.ndk = 25b
 
-# (str) Android SDK version
-android.sdk = 30
+# (bool) Use --private data storage (True) or --dir public storage (False)
+android.private_storage = True
 
-# (bool) Auto accept SDK license
-android.accept_sdk_license = True
+# (list) Android architectures
+android.archs = arm64-v8a, armeabi-v7a
 
-# (bool) Freshen requirements
-android.freshen_requirements = True
-
-# (list) Gradle dependencies (optional)
-# android.gradle_dependencies = 'com.android.support:support-v4:28.0.0'
+# (bool) enables Android auto backup feature (OS >= 6.0)
+android.allow_backup = True
 
 [buildozer]
-
-# (int) Log level (0=error,1=warn,2=info,3=debug)
 log_level = 2
-
-# (bool) Warn if running as root
-warn_on_root = 0
+warn_on_root = 1
