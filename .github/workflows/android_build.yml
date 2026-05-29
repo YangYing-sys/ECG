@@ -32,25 +32,17 @@ jobs:
           PATH: ${{ env.PATH }}:~/.local/bin
         run: |
           export PATH=$PATH:~/.local/bin
-          # 使用 Python 脚本安全清理 spec 文件中的 BOM 和空行，确保缩进安全
-          python - <<'PY'
-          import os, sys
-          fn = 'buildozer.spec'
-          if not os.path.exists(fn):
-              print("Error: buildozer.spec not found"); sys.exit(1)
-          with open(fn, 'rb') as f:
-              content = f.read()
-          if content.startswith(b'\xef\xbb\xbf'):
-              content = content[3:]
-          lines = content.decode('utf-8').splitlines()
-          i = 0
-          while i < len(lines) and not lines[i].strip():
-              i += 1
-          with open(fn, 'w', encoding='utf-8') as f:
-              f.write('\n'.join(lines[i:]))
-          print("Spec file cleaned.")
-          PY
-          # 开始进行 APK 打包
+
+          # 1. 彻底清除 buildozer.spec 中可能存在的 UTF-8 BOM 头
+          sed -i 's/\xEF\xBB\xBF//g' buildozer.spec
+
+          # 2. 自动删除所有前导空行，确保首行必定为 [app]
+          sed -i '/./,$!d' buildozer.spec
+
+          # 3. 打印前 5 行用于在日志中肉眼确认格式
+          head -n 5 buildozer.spec
+
+          # 4. 开始打包程序
           yes y | buildozer -v android debug
 
       - name: Upload APK
