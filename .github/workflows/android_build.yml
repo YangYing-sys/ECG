@@ -1,7 +1,6 @@
 name: Build Android APK
+
 on:
-  push:
-    branches: [ main ]
   workflow_dispatch:
 
 jobs:
@@ -9,72 +8,34 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.10'
 
-      - name: Configure Pip Mirror (Tsinghua)
-        # 用国内清华源加速依赖下载，防止网络波动导致报错
-        run: |
-          mkdir -p ~/.pip
-          echo "[global]" > ~/.pip/pip.conf
-          echo "index-url = https://pypi.tuna.tsinghua.edu.cn/simple/" >> ~/.pip/pip.conf
-          echo "[install]" >> ~/.pip/pip.conf
-          echo "trusted-host = pypi.tuna.tsinghua.edu.cn" >> ~/.pip/pip.conf
-
-      - name: Install Android Build Dependencies
+      - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            git zip unzip openjdk-17-jdk autoconf libtool pkg-config \
-            zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake \
-            libffi-dev libssl-dev coreutils ca-certificates curl
+          sudo apt-get install -y \
+            git zip unzip openjdk-17-jdk \
+            autoconf libtool pkg-config zlib1g-dev \
+            libncurses5-dev libncursesw5-dev libtinfo5 \
+            cmake libffi-dev libssl-dev
 
-      - name: Install Buildozer (Global)
+      - name: Install Python dependencies
         run: |
-          sudo pip3 install buildozer cython virtualenv
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
-      - name: Repair buildozer.spec (Auto-Fix Version & BOM)
-        # 使用 Python 自动检测并修复 buildozer.spec 中的所有潜在错误
-        shell: python
+      - name: Build APK
         run: |
-          import os
-          if os.path.exists('buildozer.spec'):
-              with open('buildozer.spec', 'rb') as f:
-                  content = f.read().replace(b'\xef\xbb\xbf', b'') # 去除 BOM 头
-              
-              text = content.decode('utf-8').strip()
-              
-              # 自动将错误的 numpy==2.3.0 替换为支持 Python 3.11 的稳定版 numpy==1.26.4
-              if 'numpy==2.3.0' in text:
-                  print("检测到错误的 numpy 版本，正在自动修复...")
-                  text = text.replace('numpy==2.3.0', 'numpy==1.26.4')
-              
-              with open('buildozer.spec', 'w', encoding='utf-8') as f:
-                  f.write(text)
-              print("buildozer.spec 修复完成！")
-          else:
-              print("警告: 未找到 buildozer.spec 文件！")
-
-      - name: Run Buildozer
-        # 使用 env 块，将编译器降级参数牢牢注入到整个编译生命周期
-        env:
-          CC: "gcc -Wno-error=implicit-function-declaration"
-          ac_cv_warn_c99_implicit_function_declaration: "no"
-          APP_CFLAGS: "-Wno-error=implicit-function-declaration"
-        run: |
-          # 首次运行前清理缓存以防万一
-          rm -rf ~/.buildozer/
-          # yes y 自动确认所有 Android SDK 许可服务
-          yes y | buildozer -v android debug
+          buildozer android debug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: ECG-App-Download
+          name: ECG_Monitor_APK
           path: bin/*.apk
-          
