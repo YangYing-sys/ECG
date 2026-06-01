@@ -1,53 +1,28 @@
 [app]
-
-# (str) Title of your application
-title = AI心电预警系统
-
-# (str) Package name
-package.name = ecgapp
-
-# (str) Package domain (needed for android packaging)
-package.domain = org.yangying
-
-# (str) Source code where the main.py live
-source.dir = .
-
-# (list) Source files to include (包含 py, csv 和字体 ttf)
-source.include_exts = py,png,jpg,kv,atlas,ttf,csv
-
-# (str) Application versioning
+title = AI ECG Monitor
+package.name = aiecgmonitor
+package.domain = org.test.ecg
+source.dir = . 
+source.include_exts = py,png,jpg,kv,atlas,ttf
 version = 0.1
 
-# (list) Application requirements
-# 核心三剑客：numpy (计算), pyserial (串口), pyjnius (调用安卓底层)
-requirements = python3,kivy==2.2.1,numpy,pyserial,pyjnius,android
+# 改动 1：修正了 jnius
+requirements = python3,kivy==2.3.0,numpy,pyserial,jnius
 
-# (list) Supported orientations
 orientation = portrait
+fullscreen = 0
 
-# (list) Permissions
-# 申请所有必要的权限
-android.permissions = WRITE_EXTERNAL_STORAGE, READ_EXTERNAL_STORAGE, BLUETOOTH, BLUETOOTH_ADMIN, BLUETOOTH_SCAN, BLUETOOTH_CONNECT, ACCESS_FINE_LOCATION, ACCESS_COARSE_LOCATION, INTERNET
-
-# (int) Target Android API (MatePad 适配)
-android.api = 33
-
-# (int) Minimum API
+android.api = 31
 android.minapi = 21
 
-# (list) The Android architectures to build for (华为 MatePad 是 arm64)
-# 只编译 64 位，速度最快，兼容性最好
-android.archs = arm64-v8a
+android.ndk = 25b
+android.build_tools_version = 33.0.0
+# 改动 2：增加了 armeabi-v7a，确保所有机型都能解析
+android.archs = arm64-v8a, armeabi-v7a
 
-# (bool) enables Android auto backup feature
-android.allow_backup = True
+# 改动 3：加入了 Android 12+ 强制需要的新蓝牙权限
+android.permissions = BLUETOOTH, BLUETOOTH_ADMIN, BLUETOOTH_SCAN, BLUETOOTH_CONNECT, ACCESS_FINE_LOCATION, ACCESS_COARSE_LOCATION, WRITE_EXTERNAL_STORAGE, READ_EXTERNAL_STORAGE
 
-# (str) python-for-android branch to use
-p4a.branch = master
-
-[buildozer]
-# (int) Log level (2 代表完整日志，方便报错找原因)
+[buildozer] 
 log_level = 2
-
-# (int) Display warning if buildozer is run as root
 warn_on_root = 0
