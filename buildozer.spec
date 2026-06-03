@@ -1,35 +1,65 @@
 [app]
-title = ECG Monitor
-package.name = aiecgmonitor
-package.domain = org.test
-version = 0.1
 
+# (str) Title of your application
+title = 心电预警系统
+
+# (str) Package name
+package.name = aiecgnonitor
+
+# (str) Package domain (needed for android packaging)
+package.domain = org.ecg.monitor
+
+# (str) Source code directory
 source.dir = .
-source.include_exts = py,png,jpg,kv,atlas,ttf,csv
 
-#Runtime requirements（移除 numpy 的精确版本以避免 CI 在某些 recipe 上尝试 checkout 不存在的 ref）
-requirements = python3,kivy==2.3.0,pyjnius,pyserial,numpy
+# (list) Source files to include (file extensions)
+# 必须包含 ttf 格式以引入你的字体文件
+source.include_exts = py,png,jpg,kv,atlas,ttf
 
+# (str) Application version
+version = 1.0
+
+# (list) Application requirements
+# 包含 kivy、numpy（波形缓冲处理）以及 pyserial/pyjnius 依赖
+requirements = python3,kivy,numpy,pyserial,pyjnius,android
+
+# (str) Supported orientations
+# 你的布局为垂直布局，建议锁定为 portrait（竖屏）
 orientation = portrait
+
+# (bool) Use fullscreenmode or not
 fullscreen = 0
 
-#合并后的权限（单行）
-android.permissions = BLUETOOTH, BLUETOOTH_ADMIN, ACCESS_FINE_LOCATION, ACCESS_COARSE_LOCATION, READ_EXTERNAL_STORAGE, WRITE_EXTERNAL_STORAGE, BLUETOOTH_CONNECT, BLUETOOTH_SCAN, BLUETOOTH_ADVERTISE
+# ==============================================================================
+# Android specific configuration
+# ==============================================================================
 
-Android / NDK / SDK 配置
+# (list) Permissions
+# 包含了你的代码需要的存储读写权限，以及蓝牙连接和定位权限（蓝牙扫描必须）
+android.permissions = WRITE_EXTERNAL_STORAGE, READ_EXTERNAL_STORAGE, BLUETOOTH, BLUETOOTH_ADMIN, BLUETOOTH_CONNECT, BLUETOOTH_SCAN, ACCESS_FINE_LOCATION, MOUNT_UNMOUNT_FILESYSTEMS
+
+# (int) Target device API
 android.api = 33
-android.minapi = 24
-android.ndk = 25b
-android.ndk_api = 24
 
-#仅构建 64 位
-android.archs = arm64-v8a
+# (int) Minimum API required
+android.minapi = 21
 
-android.allow_backup = True
+# (list) The Android archs to build for (64位华为平板必须要 arm64-v8a)
+android.archs = armeabi-v7a, arm64-v8a
 
-#可选：自定义 p4a 分支或本地 recipe
-p4a.branch = develop
-p4a.local_recipes = ./recipes
-#[buildozer]
+# (bool) Enable AndroidX support (required for modern android libraries)
+android.enable_androidx = True
+
+# (bool) Copy library instead of making a symlink
+# android.copy_libs = 1
+
+# (list) Java classes to bootstrap (Leave commented unless needed)
+# android.entrypoint = org.kivy.android.PythonActivity
+
+[buildozer]
+
+# (int) Log level (0 = error only, 1 = info, 2 = debug (with compiler output))
 log_level = 2
-warn_on_root = 0
+
+# (int) Display warning if buildozer is run as root (0 = False, 1 = True)
+warn_on_root = 1
