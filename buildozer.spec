@@ -1,42 +1,37 @@
 [app]
-
-title = 智能心电监测系统
-package.name = ecgapp
-package.domain = org.yangying
+title = ECG Monitor
+package.name = aiecgmonitor
+package.domain = org.test
 source.dir = .
 source.include_exts = py,png,jpg,kv,atlas,ttf,csv
-version = 1.0.0
+version = 0.1
 
-# Python 3.10 + Kivy 2.2.1
-requirements = python3==3.10.0,kivy==2.2.1,numpy==1.24.4,pyserial,pyjnius,android,plyer
+# 关键：固定 numpy 版本为 1.26.4（与 python-for-android 兼容性最好）
+requirements = python3,kivy==2.3.0,numpy==1.26.4,pyjnius,pyserial
 
 orientation = portrait
 fullscreen = 0
 
-# 权限
-android.permissions = WRITE_EXTERNAL_STORAGE, READ_EXTERNAL_STORAGE, BLUETOOTH, BLUETOOTH_ADMIN, BLUETOOTH_SCAN, BLUETOOTH_CONNECT, ACCESS_FINE_LOCATION, ACCESS_COARSE_LOCATION, INTERNET
+# 安卓权限（按需调整）
+android.permissions = BLUETOOTH, BLUETOOTH_ADMIN, ACCESS_FINE_LOCATION, ACCESS_COARSE_LOCATION, READ_EXTERNAL_STORAGE, WRITE_EXTERNAL_STORAGE, BLUETOOTH_CONNECT, BLUETOOTH_SCAN
 
-# ========== 关键配置 ==========
-# 目标 API（应用运行的 Android 版本）
+# 平台/NDK 设置（确保 minapi >= 24，以满足 numpy 的最低要求）
 android.api = 33
-
-# 最低支持 API（numpy 要求 >= 24）
 android.minapi = 24
-
-# NDK 编译 API（numpy 编译必须为 24）
+android.ndk = 25b
+# 可额外指定 ndk api（部分 p4a 版本使用此字段）
 android.ndk_api = 24
 
-# NDK 版本
-android.ndk = 25b
-
-# SDK 版本
-android.sdk = 30
-
-# 其他
-android.accept_sdk_license = True
-android.numpy = yes
+# 性能与稳定性：仅构建 64 位以降低 CI 负担
 android.archs = arm64-v8a
+
 android.allow_backup = True
+
+# 其他（可按需调）
+android.permissions = BLUETOOTH, BLUETOOTH_ADMIN, ACCESS_FINE_LOCATION, ACCESS_COARSE_LOCATION, READ_EXTERNAL_STORAGE, WRITE_EXTERNAL_STORAGE
+# 可选：如果你需要自定义 p4a 分支或自定义 recipe，解注释下面两行并添加自定义 recipes
+# p4a.branch = develop
+# p4a.local_recipes = ./recipes
 
 [buildozer]
 log_level = 2
