@@ -1,5 +1,5 @@
 [app]
-title = AI ECG Monitor
+title = ECG Monitor
 package.name = aiecgmonitor
 package.domain = org.test
 source.dir = .
