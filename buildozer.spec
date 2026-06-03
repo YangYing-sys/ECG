@@ -19,7 +19,7 @@ source.include_exts = py,png,jpg,kv,atlas,ttf
 version = 1.0
 
 # (list) Application requirements
-requirements = python3,kivy,pyserial,pyjnius,android
+requirements = python3,kivy,numpy,pyserial,pyjnius,android
 
 # (str) Supported orientations
 orientation = portrait
