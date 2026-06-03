@@ -6,6 +6,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
+    timeout-minutes: 120   # 加个超时，防止卡死
 
     steps:
       - uses: actions/checkout@v4
@@ -28,14 +29,56 @@ jobs:
           sudo rm -rf /opt/ghc
           sudo rm -rf "/usr/local/share/boost"
 
+      - name: Configure buildozer
+        run: |
+          # 创建空许可证文件
+          mkdir -p ~/.android
+          touch ~/.android/repositories.cfg
+          
+          # 强制更新 buildozer.spec 中的关键参数（解决 numpy 编译问题）
+          if [ ! -f buildozer.spec ]; then
+            buildozer init
+          fi
+          
+          # 设置 numpy 编译所需参数
+          sed -i 's/^android.api = .*/android.api = 33/' buildozer.spec
+          sed -i 's/^android.minapi = .*/android.minapi = 24/' buildozer.spec
+          sed -i 's/^android.ndk = .*/android.ndk = 25b/' buildozer.spec
+          if ! grep -q "^android.ndk_api" buildozer.spec; then
+            echo "android.ndk_api = 24" >> buildozer.spec
+          else
+            sed -i 's/^android.ndk_api = .*/android.ndk_api = 24/' buildozer.spec
+          fi
+          
+          # 启用 numpy 预编译
+          if ! grep -q "^android.numpy" buildozer.spec; then
+            echo "android.numpy = yes" >> buildozer.spec
+          else
+            sed -i 's/^android.numpy = .*/android.numpy = yes/' buildozer.spec
+          fi
+          
+          # 显示最终配置用于调试
+          echo "===== buildozer.spec ====="
+          cat buildozer.spec
+
       - name: Build with Buildozer
         run: |
-          mkdir -p ~/.android && touch ~/.android/repositories.cfg
-          # 使用 --log_level=2 方便排错，即便 Broken pipe 也不影响结果
-          yes | buildozer android debug || true
-          
+          # 去掉 || true，让它正常报错
+          yes | buildozer android debug
+
       - name: Upload APK
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: ECG-App-Release
           path: bin/*.apk
+
+      - name: Upload logs if failed
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: buildozer-logs
+          path: |
+            .buildozer/logs/
+            buildozer.log
+          retention-days: 7
