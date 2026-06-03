@@ -1,27 +1,35 @@
 [app]
-title = ECG Monitor
-package.name = aiecgmonitor
-package.domain = org.test
+
+# 基础信息
+title = 心电监测系统
+package.name = ecgapp
+package.domain = org.yangying
 source.dir = .
 source.include_exts = py,png,jpg,kv,atlas,ttf,csv
-version = 0.1
+version = 1.0.0
 
-# 维持 2.3.0 版本的 Kivy 最稳定
-requirements = python3,kivy==2.3.0,numpy,pyjnius,pyserial
+# Python 依赖（锁定版本避免冲突）
+requirements = python3==3.10.0,kivy==2.2.1,numpy==1.24.4,pyserial,pyjnius,android,plyer
 
+# 显示
 orientation = portrait
 fullscreen = 0
 
-android.permissions = BLUETOOTH, BLUETOOTH_ADMIN, ACCESS_FINE_LOCATION, ACCESS_COARSE_LOCATION, READ_EXTERNAL_STORAGE, WRITE_EXTERNAL_STORAGE, BLUETOOTH_CONNECT, BLUETOOTH_SCAN
-
-# 【核心修复：针对 numpy 报错】
+# ========== API / NDK 配置 ==========
 android.api = 33
 android.minapi = 24
 android.ndk = 25b
+android.ndk_api = 24          # 🔑 关键参数，解决 numpy 编译问题
+android.sdk = 33
 
-# 只编译 64 位，防止 GitHub 内存爆炸
+# 权限
+android.permissions = WRITE_EXTERNAL_STORAGE, READ_EXTERNAL_STORAGE, BLUETOOTH, BLUETOOTH_ADMIN, BLUETOOTH_SCAN, BLUETOOTH_CONNECT, ACCESS_FINE_LOCATION, ACCESS_COARSE_LOCATION, INTERNET
+
+# 其他
 android.archs = arm64-v8a
 android.allow_backup = True
+android.accept_sdk_license = True
+android.numpy = yes
 
 [buildozer]
 log_level = 2
