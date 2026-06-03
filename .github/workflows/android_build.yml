@@ -9,56 +9,58 @@ jobs:
     timeout-minutes: 120
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      - name: Install System Dependencies
+      - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y git zip unzip openjdk-17-jdk autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake libffi-dev libssl-dev
-          pip install --upgrade pip
-          pip install buildozer cython==0.29.33
+          sudo apt-get install -y git zip unzip openjdk-17-jdk autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake libffi-dev libssl-dev build-essential
+          python -m pip install --upgrade pip
 
-      - name: Free up disk space
+      - name: Install Python build tools (Buildozer / p4a) and compatible Cython
         run: |
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /opt/ghc
-          sudo rm -rf "/usr/local/share/boost"
+          # 固定 Cython 版本以兼容 numpy 1.26.x 的构建
+          pip install --upgrade buildozer==1.5.1 python-for-android cython==0.29.37
 
-      - name: Set ANDROID_HOME
+      - name: Free up disk space (best-effort)
         run: |
-          echo "ANDROID_HOME=$HOME/.buildozer/android/platform/android-sdk" >> $GITHUB_ENV
-          echo "ANDROID_NDK_HOME=$HOME/.buildozer/android/platform/android-ndk-r25b" >> $GITHUB_ENV
+          sudo rm -rf /usr/share/dotnet || true
+          sudo rm -rf /opt/ghc || true
+          sudo rm -rf "/usr/local/share/boost" || true
+          pip cache purge || true
 
-      - name: Build with Buildozer
+      - name: Prepare Android SDK/NDK (ensure buildozer has config files)
         run: |
-          # ========== 关键修复 ==========
-          PYTHON_PATH=$(python3 -c "import sys; print(sys.executable)")
-          echo "Using Python: $PYTHON_PATH"
-          export PATH=$(dirname $PYTHON_PATH):$PATH
-          python3 --version
-          # =============================
-          
-          mkdir -p ~/.android && touch ~/.android/repositories.cfg
-          yes | buildozer android debug
+          mkdir -p ~/.android
+          touch ~/.android/repositories.cfg
 
-      - name: Upload APK
-        if: success()
+      - name: Run Buildozer (debug APK)
+        env:
+          # 可根据需要覆盖 Android SDK/NDK 环境变量
+          # ANDROIDSDK: provided by buildozer when needed; these are left unset here
+          # ANDROIDNDK: /home/runner/.buildozer/android/platform/android-ndk-*
+          P4A_BOOTSTRAP: sdl2
+        run: |
+          set -o pipefail
+          # 强制接受所有提示。若构建失败，输出更详细日志以便排查。
+          yes | buildozer android debug &> buildozer_build.log || (tail -n 500 buildozer_build.log && exit 1)
+
+      - name: Upload build log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: buildozer-build-log
+          path: buildozer_build.log
+
+      - name: Upload APK artifact
+        if: success() || always()
         uses: actions/upload-artifact@v4
         with:
           name: ECG-App-Release
           path: bin/*.apk
-
-      - name: Upload logs if failed
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: buildozer-logs
-          path: |
-            .buildozer/logs/
-            buildozer.log
-          retention-days: 7
