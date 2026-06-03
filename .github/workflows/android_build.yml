@@ -26,7 +26,7 @@ jobs:
       - name: Install Python build tools (Buildozer / p4a) and compatible Cython
         run: |
           # 固定 Cython 版本以兼容 numpy 1.26.x 的构建
-          pip install --upgrade buildozer==1.5.1 python-for-android cython==0.29.37
+          pip install --upgrade buildozer==1.5.0 python-for-android cython==0.29.37
 
       - name: Free up disk space (best-effort)
         run: |
