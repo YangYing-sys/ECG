@@ -1,5 +1,7 @@
 name: Build Android APK
 
+
+
 on: 
 
   push: 
@@ -8,17 +10,23 @@ on:
 
   workflow_dispatch: 
 
+
+
 jobs: 
 
   build: 
 
     runs-on: ubuntu-22.04
 
+
+
     steps: 
 
     - name: Checkout Code
 
       uses: actions/checkout@v4
+
+
 
     - name: Set up Python
 
@@ -27,6 +35,8 @@ jobs:
       with: 
 
         python-version: '3.10' 
+
+
 
     - name: Set up JDK 17
 
@@ -37,6 +47,8 @@ jobs:
         distribution: 'temurin' 
 
         java-version: '17' 
+
+
 
     - name: Install System Dependencies
 
@@ -76,6 +88,8 @@ jobs:
 
           libssl-dev
 
+
+
     - name: Install Pip Dependencies
 
       run: | 
@@ -83,6 +97,8 @@ jobs:
         pip install --upgrade pip
 
         pip install --upgrade Cython==0.29.33 virtualenv buildozer
+
+
 
     - name: Get Date for Caching
 
@@ -94,7 +110,8 @@ jobs:
 
       shell: bash
 
-    # =================【这里进行了修改：更新 Key 强刷缓存】=================
+
+
     - name: Cache Buildozer
 
       uses: actions/cache@v4
@@ -107,13 +124,13 @@ jobs:
 
           .buildozer
 
-        # 修改了 key 名称，加入了 "-clean-no-numpy" 标识，强制 Actions 丢弃以前包含 NumPy 的旧环境缓存
-
-        key: ${{ runner.os }}-buildozer-clean-no-numpy-${{ steps.get-date.outputs.date }} 
+        key: ${{ runner.os }}-buildozer-${{ steps.get-date.outputs.date }} 
 
         restore-keys: | 
 
-          ${{ runner.os }}-buildozer-clean-no-numpy- 
+          ${{ runner.os }}-buildozer- 
+
+
 
     - name: Build Android APK
 
@@ -123,6 +140,8 @@ jobs:
 
         yes | buildozer android debug
 
+
+
     - name: Upload APK Artifact
 
       uses: actions/upload-artifact@v4
@@ -131,4 +150,4 @@ jobs:
 
         name: ECG-App-APK
 
-        path: bin/*.apk
+        path: bin/*.apk是这个对应的yml版本
