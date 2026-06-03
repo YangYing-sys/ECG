@@ -32,7 +32,7 @@ fullscreen = 0
 # ==============================================================================
 
 # (list) Permissions (这里已为你补齐了所有蓝牙、定位和文件存储所需的全部权限)
-android.permissions = BLUETOOTH, BLUETOOTH_ADMIN, BLUETOOTH_CONNECT, BLUETOOTH_SCAN, ACCESS_FINE_LOCATION, ACCESS_COARSE_LOCATION, WRITE_EXTERNAL_STORAGE, READ_EXTERNAL_STORAGE, MOUNT_UNMOUNT_FILESYSTEMS
+android.permissions = BLUETOOTH, BLUETOOTH_ADMIN, BLUETOOTH_CONNECT, BLUETOOTH_SCAN, ACCESS_FINE_LOCATION, ACCESS_COARSE_LOCATION, WRITE_EXTERNAL_STORAGE, READ_EXTERNAL_STORAGE
 
 # (int) Target device API
 android.api = 33
