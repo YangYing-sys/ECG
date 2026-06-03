@@ -1,66 +1,40 @@
-name: Android_Build_ECG
+name: Build Android APK
 
 on:
+  push:
+    branches: [ main, master ]
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 120
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+    - name: Checkout Code
+      uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
+    - name: Get Date
+      id: get-date
+      run: |
+        echo "date=$(date -u +'%Y%m%d')" >> $GITHUB_OUTPUT
+      shell: bash
 
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y git zip unzip openjdk-17-jdk autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake libffi-dev libssl-dev build-essential
-          python -m pip install --upgrade pip
+    - name: Cache Buildozer
+      uses: actions/cache@v4
+      with:
+        path: .buildozer
+        key: ${{ runner.os }}-buildozer-${{ steps.get-date.outputs.date }}
+        restore-keys: |
+          ${{ runner.os }}-buildozer-
 
-      - name: Install Python build tools (Buildozer / p4a) and compatible Cython
-        run: |
-          # 固定 Cython 版本以兼容 numpy 1.26.x 的构建
-          pip install --upgrade buildozer==1.5.0 python-for-android cython==0.29.37
+    - name: Build with Buildozer
+      uses: ArtemSeniaut/action-buildozer@master
+      with:
+        command: buildozer android debug
+        buildozer_version: stable
 
-      - name: Free up disk space (best-effort)
-        run: |
-          sudo rm -rf /usr/share/dotnet || true
-          sudo rm -rf /opt/ghc || true
-          sudo rm -rf "/usr/local/share/boost" || true
-          pip cache purge || true
-
-      - name: Prepare Android SDK/NDK (ensure buildozer has config files)
-        run: |
-          mkdir -p ~/.android
-          touch ~/.android/repositories.cfg
-
-      - name: Run Buildozer (debug APK)
-        env:
-          # 可根据需要覆盖 Android SDK/NDK 环境变量
-          # ANDROIDSDK: provided by buildozer when needed; these are left unset here
-          # ANDROIDNDK: /home/runner/.buildozer/android/platform/android-ndk-*
-          P4A_BOOTSTRAP: sdl2
-        run: |
-          set -o pipefail
-          # 强制接受所有提示。若构建失败，输出更详细日志以便排查。
-          yes | buildozer android debug &> buildozer_build.log || (tail -n 500 buildozer_build.log && exit 1)
-
-      - name: Upload build log
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: buildozer-build-log
-          path: buildozer_build.log
-
-      - name: Upload APK artifact
-        if: success() || always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ECG-App-Release
-          path: bin/*.apk
+    - name: Upload APK Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ECG-App-APK
+        path: bin/*.apk
