@@ -29,8 +29,20 @@ jobs:
           sudo rm -rf /opt/ghc
           sudo rm -rf "/usr/local/share/boost"
 
+      - name: Set ANDROID_HOME
+        run: |
+          echo "ANDROID_HOME=$HOME/.buildozer/android/platform/android-sdk" >> $GITHUB_ENV
+          echo "ANDROID_NDK_HOME=$HOME/.buildozer/android/platform/android-ndk-r25b" >> $GITHUB_ENV
+
       - name: Build with Buildozer
         run: |
+          # ========== 关键修复 ==========
+          PYTHON_PATH=$(python3 -c "import sys; print(sys.executable)")
+          echo "Using Python: $PYTHON_PATH"
+          export PATH=$(dirname $PYTHON_PATH):$PATH
+          python3 --version
+          # =============================
+          
           mkdir -p ~/.android && touch ~/.android/repositories.cfg
           yes | buildozer android debug
 
