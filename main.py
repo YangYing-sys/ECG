@@ -3,8 +3,6 @@ import numpy as np
 import re
 import time
 import threading
-import serial
-import serial.tools.list_ports
 from collections import deque
 
 from kivy.app import App
@@ -149,7 +147,7 @@ class CSVDataManager:
             pass
 
 
-# === 全局样式（保持原有 demo4 设定） ===
+# === 全局样式 ===
 FONT_NAME = 'simhei.ttf'
 EMOJI_FONT = 'seguiemj.ttf'
 Window.clearcolor = get_color_from_hex('#F9F9F9')
@@ -204,7 +202,7 @@ class HardwareThread(threading.Thread):
         """ 专门给手机 APP 连蓝牙模块（HC-05）的方法 """
         self.status_callback("【蓝牙寻找】寻找配对的 HC-05 设备...")
 
-        # ◄ 修复 3：在进程调用安卓底层 Java 方法前，必须在子线程内显式附着虚拟机，防挂载内存越界闪退
+        # 在进程调用安卓底层 Java 方法前，必须在子线程内显式附着虚拟机，防挂载内存越界闪退
         try:
             import jnius
             jnius.attach_thread()
@@ -218,12 +216,12 @@ class HardwareThread(threading.Thread):
             Build = autoclass('android.os.Build$VERSION')
             sdk_int = Build.SDK_INT
 
-            # ◄ 修复 4：针对 Android 12+ (SDK 31) 附近的设备连接许可做安全性温和等待拦截，防 SecurityException 闪退
+            # 针对 Android 12+ (SDK 31) 附近的设备连接许可做安全性温和等待拦截，防 SecurityException 闪退
             try:
                 from android.permissions import check_permission, Permission
                 target_perm = "android.permission.BLUETOOTH_CONNECT" if sdk_int >= 31 else Permission.BLUETOOTH
 
-                # 如果没有权限，后台主动挂起 10 秒等待用户在系统弹框中点击授权，而不强行触发 Java 爆错
+                # 如果没有权限，后台主动挂起 10 秒等待用户在系统弹框中点击授权，而不强行触发 Java 报错
                 if not check_permission(target_perm):
                     self.status_callback("【附近设备权限等待】请在弹出的系统对话框中允许蓝牙访问权限...")
                     for _ in range(10):
@@ -244,7 +242,7 @@ class HardwareThread(threading.Thread):
                 self.status_callback("【错误】蓝牙未开启，请先在手机设置中打开蓝牙！")
                 return
 
-            # ◄ 修复 5：用 try/except 将底层的反射寻找行为独立包围起来
+            # 用 try/except 将底层的反射寻找行为独立包围起来
             try:
                 paired_devices = adapter.getBondedDevices().toArray()
             except Exception as se:
@@ -304,7 +302,7 @@ class HardwareThread(threading.Thread):
             self.status_callback(f"【蓝牙链路中断】: {str(e)}")
         finally:
             try:
-                # ◄ 修复 6：结束后剥离 JVM 附着线程，保持 App 正常销毁回收周期
+                # 结束后剥离 JVM 附着线程，保持 App 正常销毁回收周期
                 import jnius
                 jnius.detach_thread()
             except:
@@ -312,9 +310,18 @@ class HardwareThread(threading.Thread):
 
     def run_serial_mode(self):
         self.status_callback("【探测中】正在寻找 USB 链路...")
+
+        # ◄ 动态导入移到了这里：避免在 Android 端因为加载 serial/list_ports 导致直接闪退
+        try:
+            import serial
+            import serial.tools.list_ports
+        except ImportError:
+            self.status_callback("【错误】当前平台不支持 PySerial 串口库！")
+            return
+
         ports = list(serial.tools.list_ports.comports())
         if not ports:
-            self.status_callback("【错误】未检测到蓝牙设备，请检查是否已连接！")  # 【错误】未检测到串口设备，请检查 CH340 驱动！
+            self.status_callback("【错误】未检测到串口设备，请检查是否已连接！")
             return
 
         port_name = ports[0].device
@@ -391,7 +398,7 @@ class ECGPlotWidget(FloatLayout):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.data_len = 1000
-        self.ecg_buffer = np.zeros(self.data_len)  # ◄ 保持 numpy 依赖不变
+        self.ecg_buffer = np.zeros(self.data_len)
         self.ptr = 0
         self.display_mode = 'FLAT'
 
@@ -485,15 +492,13 @@ class ECGPlotWidget(FloatLayout):
             self.last_raw = raw
 
             # 3. 【软件低通平滑】增强平滑度，吸收 50Hz 工频噪点
-            # 0.1 的权重会让波形线条更细、更圆润，不会出现毛刺团
             self.lpf = self.lpf * 0.9 + self.hpf * 0.1
 
             # 4. 【核心改动：增益调整】
             # 将原来的 18.0 降为 1.5 到 3.0 之间。
-            # 如果波形还是满屏，就改小（如 1.0）；如果波形太小，就改大（如 4.0）。
             final_value = self.lpf * 2.5
 
-            # 5. 安全限幅 (防止撞击上下边界)
+            # 5. 安全限幅
             final_value = max(-55, min(55, final_value))
 
             self.ecg_buffer[self.ptr] = final_value
@@ -533,14 +538,13 @@ class ECGPlotWidget(FloatLayout):
 
 
 # ==========================================
-# 3. 主应用 App (保持 demo4.py 原装 UI 参数和组件实例)
+# 3. 主应用 App (保持原有 UI 参数和组件实例)
 # ==========================================
 class ECGApp(App):
     def build(self):
-        # ◄ 修复 7：软件一启动，立即触发针对 Android 平台的动态授权框弹出申请
         request_android_permissions()
 
-        self.title = "AI辅助心电预警系统 "
+        self.title = "AI辅助心电预警系统"
 
         self.current_bpm = 0
         self.current_hrv = 0
@@ -558,7 +562,6 @@ class ECGApp(App):
         top_row = BoxLayout(size_hint_y=0.15, spacing=15)
         left_col = BoxLayout(orientation='horizontal', size_hint_x=0.25)
 
-        # ◄ 原装 UI：使用 FONT_NAME 与 EMOJI_FONT 初始化的控件参数完全原封不动
         self.heart_label = Label(text="❤️", font_size='40sp', halign='center', valign='middle', font_name=EMOJI_FONT)
         self.heart_label.bind(size=self.heart_label.setter('text_size'))
 
@@ -603,11 +606,9 @@ class ECGApp(App):
         Clock.schedule_interval(self.update_ui, 0.5)
         self.heart_anim_event = Clock.schedule_interval(self.animate_heart, 0.8)
 
-        # ◄ 占位修复：防止在 Android 延迟运行两秒期间用户突然关闭应用造成的 JVM 线程停止崩溃抛出
         self.hw_thread = None
 
         if platform == 'android':
-            # Android 端延时 2 秒让权限对话框充分展现，防异步权限注册冲突
             Clock.schedule_once(lambda dt: self.start_hardware_thread(), 2.0)
         else:
             self.start_hardware_thread()
@@ -663,7 +664,6 @@ class ECGApp(App):
         self.heart_label.color = get_color_from_hex('#e74c3c')
 
     def start_manual_diagnosis(self, instance):
-        # ◄ 优化逻辑：如果是链路重置情况，点击该按钮重新激活设备连接线程而非立即诊断
         if self.btn_diag.text in ["重置以打通硬体链路", "重置并开启全新捕获"]:
             self.status_label.text = "状态: 重新连接硬件链路..."
             self.status_label.color = get_color_from_hex('#2980b9')
@@ -794,7 +794,6 @@ class ECGApp(App):
             self.last_sms_time = now
 
     def show_alert_popup(self, title_text, msg_text):
-        # ◄ 原装 UI：Popup 的 title_font 等属性完全保持原有 demo4 参数，直接渲染
         box = BoxLayout(orientation='vertical', padding=20, spacing=20)
         lbl = Label(text=msg_text, font_name=FONT_NAME, font_size='18sp',
                     color=(1, 1, 1, 1), halign='center', valign='middle')
@@ -813,7 +812,6 @@ class ECGApp(App):
         popup.open()
 
     def on_stop(self):
-        # ◄ 修复 8：如果在 Android 端开局 2 秒的延迟内关闭应用，需安全判断 hw_thread 状态，防止 AttributeError 闪退
         if self.hw_thread is not None:
             self.hw_thread.stop()
 
