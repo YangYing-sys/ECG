@@ -18,10 +18,13 @@ from kivy.core.window import Window
 from kivy.utils import get_color_from_hex
 from kivy.utils import platform
 from kivy.uix.popup import Popup
-# -----csv-----
+#-----csv-----
 import os
 import csv
+import time
 from datetime import datetime, timedelta
+from kivy.utils import platform
+from kivy.app import App
 
 
 class CSVDataManager:
@@ -30,46 +33,17 @@ class CSVDataManager:
         self.save_folder = self.get_android_public_folder()
         self.clean_7days_old_files()  # 启动时清理7天前的垃圾文件
 
-    def save_waveform(self, clean_ecg_value):
-        """实时记录‘干净’的波形数值到 CSV"""
-        filepath = os.path.join(self.save_folder, f"ECG_Waveform_{datetime.now().strftime('%Y-%m-%d')}.csv")
-        file_exists = os.path.isfile(filepath)
-
-        try:
-            with open(filepath, mode='a', newline='') as f:
-                writer = csv.writer(f)
-                if not file_exists:
-                    writer.writerow(['Time', 'Voltage'])  # 表头
-
-                # 记录时间戳和滤波后的值
-                time_str = datetime.now().strftime('%H:%M:%S.%f')[:-3]
-                writer.writerow([time_str, clean_ecg_value])
-        except:
-            pass
-
     def get_android_public_folder(self):
-        """获取手机专属存储路径。在 Android 13 上免去申请动态权限的繁琐以及闪退风险"""
+        """获取手机存储，将文件存放到手机的 ‘Download / 心电数据’ 文件夹内"""
         if platform == 'android':
-            try:
-                from jnius import autoclass
-                # 获取当前应用的 context
-                PythonActivity = autoclass('org.kivy.android.PythonActivity')
-                current_activity = PythonActivity.mActivity
-                context = current_activity.getApplicationContext()
+            # 请求安卓读写权限
+            from android.permissions import request_permissions, Permission
+            request_permissions([Permission.WRITE_EXTERNAL_STORAGE, Permission.READ_EXTERNAL_STORAGE])
 
-                # 获取当前包名私有的外置存储目录目录 (免权限)
-                # 路径一般为: /storage/emulated/0/Android/data/org.ecg.monitor/files/心电数据记录
-                file_dir = context.getExternalFilesDir(None)
-                if file_dir:
-                    base_path = file_dir.getAbsolutePath()
-                else:
-                    from kivy.app import App
-                    base_path = App.get_running_app().user_data_dir
-            except Exception as e:
-                # 容错：使用 kivy 自带的沙盒目录
-                from kivy.app import App
-                base_path = App.get_running_app().user_data_dir
-
+            # 使用 jnius 调用安卓底层 API 获取 Download 文件夹
+            from jnius import autoclass
+            Environment = autoclass('android.os.Environment')
+            base_path = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).getAbsolutePath()
             folder_path = os.path.join(base_path, '心电数据记录')
         else:
             # 如果在电脑上运行，就存在代码旁边的文件夹里
@@ -132,17 +106,13 @@ class CSVDataManager:
                         pass
         except Exception as e:
             pass
-
-
 # === 全局样式 ===
 FONT_NAME = 'simhei.ttf'
 EMOJI_FONT = 'seguiemj.ttf'
 Window.clearcolor = get_color_from_hex('#F9F9F9')
 
-
 def E(emoji_char):
     return f"[font={EMOJI_FONT}]{emoji_char}[/font]"
-
 
 class RichLogBox(Label):
     def __init__(self, **kwargs):
@@ -168,9 +138,11 @@ class RichLogBox(Label):
         self.border.rectangle = (self.x, self.y, self.width, self.height)
         self.text_size = (self.width - 30, self.height - 30)
 
-
 # ==========================================
-# 1. 硬件线程 (包含安卓HC-05蓝牙原生支持)
+# 1. 硬件线程 (纯硬件串口物理通道)
+# ==========================================
+# ==========================================
+# 1. 强化版硬件线程 (解决延迟与乱码问题)
 # ==========================================
 class HardwareThread(threading.Thread):
     def __init__(self, data_callback, status_callback):
@@ -185,86 +157,23 @@ class HardwareThread(threading.Thread):
         else:
             self.run_serial_mode()
 
-    def run_bluetooth_mode(self):
-        """ 专门给手机 APP 连蓝牙模块（HC-05）的方法 """
-        self.status_callback("【蓝牙寻找】寻找配对的 HC-05 设备...")
-
-        # =================【关键修复】=================
-        # 调用任何 JNI/Java 方法前，必须将当前线程附着到 Java 虚拟机 (JVM)
-        import jnius
-        jnius.attach_thread()
-
-        try:
-            from jnius import autoclass
-            BluetoothAdapter = autoclass('android.bluetooth.BluetoothAdapter')
-            UUID = autoclass('java.util.UUID')
-            adapter = BluetoothAdapter.getDefaultAdapter()
-
-            if adapter is None:
-                self.status_callback("【错误】当前设备不支持蓝牙设备！")
-                return
-
-            if not adapter.isEnabled():
-                self.status_callback("【错误】蓝牙未开启，请先在手机设置中打开蓝牙！")
-                return
-
-            # 获取配对设备（此处如果未授权，将会被 try-except 安全捕获，不至于闪退）
-            paired_devices = adapter.getBondedDevices().toArray()
-            hc05_device = None
-
-            # 优先寻找名字里带 HC-05 的设备
-            for device in paired_devices:
-                name = device.getName()
-                if name and ("HC-05" in name or "HC05" in name or "JDY" in name):
-                    hc05_device = device
-                    break
-
-            # 如果没找到带特定名字的，自动回退到第一个绑定的设备
-            if not hc05_device and len(paired_devices) > 0:
-                hc05_device = paired_devices[0]
-
-            if not hc05_device:
-                self.status_callback("【错误】未找到已配对的蓝牙设备，请前往手机设置配对！")
-                return
-
-            self.status_callback(f"【蓝牙】正在连接: {hc05_device.getName()}...")
-            # 蓝牙串口服务标准 UUID (SPP)
-            uuid = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
-            socket = hc05_device.createRfcommSocketToServiceRecord(uuid)
-            socket.connect()
-
-            input_stream = socket.getInputStream()
-            self.status_callback("【硬件链路】HC-05蓝牙连接成功！开始接收数据...")
-
-            buffer = ""
-            while self.running:
-                byte_val = input_stream.read()
-                if byte_val == -1:
-                    break  # 流断开了
-
-                ch = chr(byte_val)
-                buffer += ch
-
-                if ch == '\n':
-                    self.parse_and_emit(buffer.strip())
-                    buffer = ""
-
-        except Exception as e:
-            self.status_callback(f"【蓝牙链路中断】: {str(e)}")
-        finally:
-            # =================【关键修复】=================
-            # 线程结束前或抛出异常时，解除 JVM 附着，防止内存泄漏
-            jnius.detach_thread()
-
     def run_serial_mode(self):
         self.status_callback("【探测中】正在寻找 USB 链路...")
-        ports = list(serial.tools.list_ports.comports())
-        if not ports:
-            self.status_callback("【错误】未检测到蓝牙设备，请检查是否已连接！")#【错误】未检测到串口设备，请检查 CH340 驱动！
+        try:
+            import serial
+            import serial.tools.list_ports
+        except ImportError:
+            self.status_callback("【错误】当前平台不支持 PySerial 串口库！")
             return
 
-        port_name = ports[0].device
         try:
+            ports = list(serial.tools.list_ports.comports())
+            if not ports:
+                self.status_callback("【错误】未检测到串口设备，请检查是否已连接！")
+                return
+
+            port_name = ports[0].device
+
             # 提高串口读取的鲁棒性
             ser = serial.Serial(port_name, 115200, timeout=0.05)
             # 开局先清空一次缓冲区
@@ -287,9 +196,9 @@ class HardwareThread(threading.Thread):
             self.status_callback(f"【链路中断】: {str(e)}")
 
     def parse_and_emit(self, line):
-        """ 解析新的单片机多协议格式： ADC:4026 | ECG:67.4 | BPM:0 | RR:0 | HRV:0 | PVC """
         try:
-            # 1. 正则提取
+            # 1. 极其严格且容错的正则提取
+            # 使用更强力的匹配，防止数据因为粘连导致提取失败
             m_ecg = re.search(r'ECG:([-+]?\d*\.?\d+)', line)
             m_bpm = re.search(r'BPM:(\d+)', line)
             m_hrv = re.search(r'HRV:(\d+)', line)
@@ -299,7 +208,7 @@ class HardwareThread(threading.Thread):
             bpm_val = int(m_bpm.group(1)) if m_bpm else 0
             hrv_val = int(m_hrv.group(1)) if m_hrv else 0
 
-            # 3. 实时状态判定 (支持新版 C 代码协议的尾部字符串)
+            # 3. 实时状态判定
             rhythm_str = "Wait"
             if "Normal" in line:
                 rhythm_str = "Normal"
@@ -307,10 +216,11 @@ class HardwareThread(threading.Thread):
                 rhythm_str = "AFib"
             elif "PVC" in line:
                 rhythm_str = "PVC"
-            elif "Wait" in line or "Invalid" in line:
+            elif "Wait" in line:
                 rhythm_str = "Wait"
 
-            # 4. 同步推送机制向 UI 通知更新
+            # 4. 【同步推送机制】不再屏蔽 BPM=0 的数据
+            # 只要有数据过来，哪怕是 Wait，也要推给 UI，这样界面才会“动”起来
             self.data_callback(ecg_val, bpm_val, hrv_val, rhythm_str)
 
             # 5. 只有真正有数值时才录入 CSV，防止日志被 Wait 刷屏
@@ -320,18 +230,15 @@ class HardwareThread(threading.Thread):
                     app.csv_manager.save_data(bpm_val, hrv_val, rhythm_str)
 
         except Exception as e:
-            # 静默处理通讯过程中的残缺行
+            # 静默处理解析残缺行
             pass
 
     def stop(self):
         self.running = False
-
-
 # ==========================================
-# 2. 精密 ECG 绘图 Widget (保持原始你的代码不变)
+# 2. 精密 ECG 绘图 Widget
 # ==========================================
 from kivy.uix.floatlayout import FloatLayout
-
 
 class ECGPlotWidget(FloatLayout):
     def __init__(self, **kwargs):
@@ -415,39 +322,27 @@ class ECGPlotWidget(FloatLayout):
         self.plot_rect = (plot_x, plot_y, plot_w, plot_h)
 
     def push_data(self, value):
-        """优化后的滤波算法：显著降低增益，抑制溢出噪声"""
-        try:
-            raw = float(value)
+        # 1. 【极速基线回正】 (把 0.05 改成 0.25，提高 5 倍回正速度！)
+        # 这样当你人一动，波形即便乱飞，也会在 0.1 秒内“嗖”地一下回到正中央。
+        self.baseline = self.baseline * 0.75 + value * 0.25
+        clean_value = value - self.baseline
 
-            # 1. 极速导出初始化
-            if not hasattr(self, 'init_flag') or not self.init_flag:
-                self.lpf = raw
-                self.hpf = 0.0
-                self.last_raw = raw
-                self.init_flag = True
+        # 2. 【智能抗噪低通滤网】 (增大旧数据权重到 0.85)
+        # 这会像抹了磨皮滤镜一样，把那些锯齿状的毛刺“烫平”。
+        if not hasattr(self, 'last_smoothed'): self.last_smoothed = 0
+        self.last_smoothed = self.last_smoothed * 0.85 + clean_value * 0.15
 
-            # 2. 【基线漂移过滤】系数调至 0.92，让波形更稳地停留在0刻度线
-            self.hpf = 0.92 * (self.hpf + raw - self.last_raw)
-            self.last_raw = raw
+        # 3. 【防削峰动态倍率】
+        # 看你的图，信号已经爆表了。我们要把倍率降下来，建议 1.5 ~ 2.0。
+        # 只要波形不顶到 60 轴，你就永远不会觉得它“不动了”。
+        final_value = self.last_smoothed * 1.8
 
-            # 3. 【软件低通平滑】增强平滑度，吸收 50Hz 工频噪点
-            # 0.1 的权重会让波形线条更细、更圆润，不会出现毛刺团
-            self.lpf = self.lpf * 0.9 + self.hpf * 0.1
+        # 4. 【溢出保护】 防止极端移动导致界面崩溃
+        if final_value > 80: final_value = 80
+        if final_value < -80: final_value = -80
 
-            # 4. 【核心改动：增益调整】
-            # 将原来的 18.0 降为 1.5 到 3.0 之间。
-            # 如果波形还是满屏，就改小（如 1.0）；如果波形太小，就改大（如 4.0）。
-            final_value = self.lpf * 2.5
-
-            # 5. 安全限幅 (防止撞击上下边界)
-            final_value = max(-55, min(55, final_value))
-
-            self.ecg_buffer[self.ptr] = final_value
-            self.ptr = (self.ptr + 1) % self.data_len
-
-            return round(final_value, 2)
-        except:
-            return None
+        self.ecg_buffer[self.ptr] = final_value
+        self.ptr = (self.ptr + 1) % self.data_len
 
     def render(self, dt):
         if not hasattr(self, 'plot_rect'): return
@@ -477,24 +372,12 @@ class ECGPlotWidget(FloatLayout):
 
         self.line.points = points
 
-
 # ==========================================
-# 3. 主应用 App (保持原始你的代码不变)
+# 3. 主应用 App
 # ==========================================
 class ECGApp(App):
     def build(self):
-        self.title = "心电预警系统 "
-        # 在程序入口处，针对安卓系统动态申请蓝牙和定位权限
-        if platform == 'android':
-            from android.permissions import request_permissions, Permission
-            # 申请针对 Android 12 和 Android 13 的蓝牙及定位权限
-            permissions = [
-                Permission.BLUETOOTH_SCAN,
-                Permission.BLUETOOTH_CONNECT,
-                Permission.ACCESS_FINE_LOCATION,
-                Permission.ACCESS_COARSE_LOCATION
-            ]
-            request_permissions(permissions)
+        self.title = "AI辅助心电预警系统 "
 
         self.current_bpm = 0
         self.current_hrv = 0
@@ -568,13 +451,7 @@ class ECGApp(App):
     def on_serial_data(self, ecg_val, bpm_val, hrv_val, rhythm_str):
         self.last_valid_data_time = time.time()
 
-        # 【关键改动】这里获取滤波后的干净值
-        clean_ecg = self.graph.push_data(ecg_val)
-
-        # 将干净值录入 CSV (这就是你想要的“移动端测到的数据”)
-        if clean_ecg is not None and self.diag_status == 'RUNNING':
-            self.csv_manager.save_waveform(clean_ecg)
-
+        self.graph.push_data(ecg_val)
         if bpm_val > 0:
             self.current_bpm = bpm_val
             self.current_hrv = hrv_val
@@ -638,7 +515,7 @@ class ECGApp(App):
                 self.advice_box.text = (
                     f"{E('⚠️')}【检测中断警告：链路静默】\n"
                     "未侦测到实时硬件波形！请确认：\n"
-                    "1. 连接线是否插稳，COM/蓝牙 通讯端是否被占用。\n"
+                    "1. 连接线是否插稳，COM通讯端是否被其他程序干死占用。\n"
                     "2. 传感器导联金属片是否完全贴紧肌肤导电。"
                 )
                 self.diag_status = 'IDLE'
@@ -684,6 +561,7 @@ class ECGApp(App):
             self.status_label.text = f"智能深部析出... {prog}%"
             return
 
+        # ★这里改回了 >= 3 次，防止硬件上的短暂误报
         afib = self.rhythm_history.count("AFib")
         pvc = self.rhythm_history.count("PVC")
 
@@ -736,7 +614,6 @@ class ECGApp(App):
 
     def on_stop(self):
         self.hw_thread.stop()
-
 
 if __name__ == '__main__':
     ECGApp().run()
