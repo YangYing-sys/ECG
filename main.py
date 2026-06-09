@@ -173,8 +173,8 @@ class HardwareThread(threading.Thread):
 
     def run_bluetooth_mode(self):
         """ 专门给手机 APP 连蓝牙模块（HC-05）的方法 """
-        import jnius
-        jnius.attach_thread()
+        # import jnius
+        # jnius.attach_thread()
         socket = None
 
         try:
@@ -269,7 +269,7 @@ class HardwareThread(threading.Thread):
                     socket.close()
                 except:
                     pass
-            jnius.detach_thread()
+            # jnius.detach_thread()
 
     def run_serial_mode(self):
         self.status_callback("【探测中】正在寻找 USB 链路...")
