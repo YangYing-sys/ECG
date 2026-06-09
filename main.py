@@ -3,8 +3,6 @@ import numpy as np
 import re
 import time
 import threading
-import serial
-import serial.tools.list_ports
 from collections import deque
 
 from kivy.app import App
@@ -177,7 +175,7 @@ class HardwareThread(threading.Thread):
         """ 专门给手机 APP 连蓝牙模块（HC-05）的方法 """
         self.status_callback("【蓝牙寻找】寻找配对的 HC-05 设备...")
 
-        # === 关键修改 1/2：将子线程附着在 JVM 上，防止 JNI 调用底层闪退 ===
+        # === 关键修改 1：将子线程附着在 JVM 上，防止 JNI 调用底层闪退 ===
         import jnius
         jnius.attach_thread()
 
@@ -235,14 +233,23 @@ class HardwareThread(threading.Thread):
         except Exception as e:
             self.status_callback(f"【蓝牙链路中断】: {str(e)}")
         finally:
-            # === 关键修改 1/2 伴随操作：在执行结束后解除 JVM 附着 ===
+            # === 解除 JVM 附着，防止内存泄漏 ===
             jnius.detach_thread()
 
     def run_serial_mode(self):
         self.status_callback("【探测中】正在寻找 USB 链路...")
+
+        # === 关键修改 2：仅在电脑端调用时动态导入串口模块，安卓端完全不导入 ===
+        try:
+            import serial
+            import serial.tools.list_ports
+        except ImportError:
+            self.status_callback("【错误】当前系统缺少 pyserial 运行库！")
+            return
+
         ports = list(serial.tools.list_ports.comports())
         if not ports:
-            self.status_callback("【错误】未检测到蓝牙设备，请检查是否已连接！")
+            self.status_callback("【错误】未检测到串口设备，请检查是否已连接！")
             return
 
         port_name = ports[0].device
@@ -467,7 +474,7 @@ class ECGApp(App):
     def build(self):
         self.title = "AI辅助心电预警系统 "
 
-        # === 关键修改 2/2：在安卓启动首帧时，动态请求蓝牙连接、蓝牙扫描与定位权限 ===
+        # === 关键修改 3：在安卓启动首帧时，动态请求蓝牙和定位权限 ===
         if platform == 'android':
             from android.permissions import request_permissions, Permission
             request_permissions([
