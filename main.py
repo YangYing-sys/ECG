@@ -175,6 +175,7 @@ class HardwareThread(threading.Thread):
         """ 专门给手机 APP 连蓝牙模块（HC-05）的方法 """
         import jnius
         jnius.attach_thread()
+        socket = None
 
         try:
             from jnius import autoclass
@@ -182,9 +183,6 @@ class HardwareThread(threading.Thread):
             UUID = autoclass('java.util.UUID')
             Integer = autoclass('java.lang.Integer')
 
-            socket = None
-
-            # 循环检测与尝试连接：解决权限异步响应延迟以及HC-05意外断开重连
             while self.running:
                 adapter = BluetoothAdapter.getDefaultAdapter()
                 if adapter is None:
@@ -197,23 +195,20 @@ class HardwareThread(threading.Thread):
                     time.sleep(5)
                     continue
 
-                # 尝试抓取已配对设备
                 try:
                     paired_devices = adapter.getBondedDevices().toArray()
                 except Exception as e:
-                    self.status_callback("【权限等待】正在等待授权，或者未在手机设置中开启蓝牙/位置权限...")
-                    time.sleep(3)
+                    self.status_callback("【权限等待】正在等待授权，或者未在手机设置中开启定位与蓝牙权限...")
+                    time.sleep(2)
                     continue
 
                 hc05_device = None
-                # 优先寻找名字里带 HC-05 的设备
                 for device in paired_devices:
                     name = device.getName()
                     if name and ("HC-05" in name or "HC05" in name or "JDY" in name):
                         hc05_device = device
                         break
 
-                # 回退：如果没有叫HC-05的，默认尝试抓取第一个配对好的设备
                 if not hc05_device and len(paired_devices) > 0:
                     hc05_device = paired_devices[0]
 
@@ -225,47 +220,49 @@ class HardwareThread(threading.Thread):
                 self.status_callback(f"【蓝牙】正在尝试联通: {hc05_device.getName()}...")
 
                 try:
-                    # 优先使用：标准 RFCOMM 通道握手连接
                     uuid = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
                     socket = hc05_device.createRfcommSocketToServiceRecord(uuid)
                     socket.connect()
                 except Exception as standard_err:
-                    # 备用使用：反射机制直接连接通道 1 (绕过高版本安卓对于标准 SPP 的系统拦截)
                     try:
                         method = hc05_device.getClass().getMethod("createRfcommSocket", [Integer.TYPE])
                         socket = method.invoke(hc05_device, [Integer(1)])
                         socket.connect()
                     except Exception as e_reflect:
-                        self.status_callback(f"【连接异常】由于设备占用或信号弱，无法连接。5秒后重试...")
+                        self.status_callback("【连接异常】无法建立连接，5秒后重试...")
                         time.sleep(5)
                         continue
 
-                # 握手成功，直接跳出重试循环
-                break
+                # 握手成功
+                self.status_callback("【硬件链路】HC-05蓝牙联通成功！等待启动诊断...")
 
-            if not self.running:
-                if socket: socket.close()
-                return
-
-            input_stream = socket.getInputStream()
-            self.status_callback("【硬件链路】HC-05蓝牙联通成功！开始实时接收ECG数据...")
-
-            buffer = ""
-            while self.running:
-                # 阻塞读取输入流，CPU消耗极低
-                byte_val = input_stream.read()
-                if byte_val == -1:
-                    break  # 流断开了
-
-                ch = chr(byte_val)
-                buffer += ch
-
-                if ch == '\n':
-                    self.parse_and_emit(buffer.strip())
+                try:
+                    input_stream = socket.getInputStream()
                     buffer = ""
+                    while self.running:
+                        byte_val = input_stream.read()
+                        if byte_val == -1:
+                            break
+
+                        ch = chr(byte_val)
+                        buffer += ch
+
+                        if ch == '\n':
+                            self.parse_and_emit(buffer.strip())
+                            buffer = ""
+                except Exception as read_err:
+                    self.status_callback("【连接断开】蓝牙读取中断，正在尝试重新连接...")
+                finally:
+                    if socket:
+                        try:
+                            socket.close()
+                        except:
+                            pass
+                        socket = None
+                    time.sleep(2)
 
         except Exception as e:
-            self.status_callback(f"【蓝牙链路中断】: {str(e)}")
+            self.status_callback(f"【蓝牙线程异常中断】: {str(e)}")
         finally:
             if socket:
                 try:
@@ -290,13 +287,10 @@ class HardwareThread(threading.Thread):
 
         port_name = ports[0].device
         try:
-            # 提高串口读取的鲁棒性
             ser = serial.Serial(port_name, 115200, timeout=0.05)
-            # 开局先清空一次缓冲区
             ser.reset_input_buffer()
 
             while self.running:
-                # 贪婪读取机制：如果缓冲区堆积了太多数据，瞬间丢弃旧数据，直接抓最新的！
                 if ser.in_waiting > 500:
                     ser.reset_input_buffer()
 
@@ -312,40 +306,49 @@ class HardwareThread(threading.Thread):
             self.status_callback(f"【链路中断】: {str(e)}")
 
     def parse_and_emit(self, line):
-        """ 解析新的单片机多协议格式： ADC:4026 | ECG:67.4 | BPM:0 | RR:0 | HRV:0 | PVC """
         try:
-            # 1. 正则提取
             m_ecg = re.search(r'ECG:([-+]?\d*\.?\d+)', line)
             m_bpm = re.search(r'BPM:(\d+)', line)
             m_hrv = re.search(r'HRV:(\d+)', line)
+            m_adc = re.search(r'ADC:(\d+)', line)
 
-            # 2. 提取数值
             ecg_val = float(m_ecg.group(1)) if m_ecg else 0.0
             bpm_val = int(m_bpm.group(1)) if m_bpm else 0
             hrv_val = int(m_hrv.group(1)) if m_hrv else 0
+            adc_val = int(m_adc.group(1)) if m_adc else None
 
-            # 3. 实时状态判定 (支持新版 C 代码协议的尾部字符串)
+            # 精准导联脱落检测
             rhythm_str = "Wait"
-            if "Normal" in line:
-                rhythm_str = "Normal"
-            elif "AFib" in line:
-                rhythm_str = "AFib"
-            elif "PVC" in line:
-                rhythm_str = "PVC"
-            elif "Wait" in line or "Invalid" in line:
-                rhythm_str = "Wait"
 
-            # 4. 同步推送机制向 UI 通知更新
+            # 1. 优先通过硬件指令检测 (若 AD8232 检测到 LO+ 或 LO- 脱落，建议单片机直接串口发送 LOD)
+            if "LOD" in line or "leadoff" in line.lower() or "off" in line.lower():
+                rhythm_str = "LeadOff"
+
+            # 2. 备用通过 ADC 极限值饱和检测 (拔掉导联时，通常电压会死锁在极限最高或最低值)
+            elif adc_val is not None:
+                if adc_val >= 4090 or adc_val <= 5:  # 12-bit ADC 饱和极值
+                    rhythm_str = "LeadOff"
+                elif adc_val >= 1020 and adc_val <= 1024:  # 10-bit ADC 饱和极值
+                    rhythm_str = "LeadOff"
+
+            if rhythm_str != "LeadOff":
+                if "Normal" in line:
+                    rhythm_str = "Normal"
+                elif "AFib" in line:
+                    rhythm_str = "AFib"
+                elif "PVC" in line:
+                    rhythm_str = "PVC"
+                elif "Wait" in line or "Invalid" in line:
+                    rhythm_str = "Wait"
+
             self.data_callback(ecg_val, bpm_val, hrv_val, rhythm_str)
 
-            # 5. 只有真正有数值时才录入 CSV，防止日志被 Wait 刷屏
-            if bpm_val > 0 and rhythm_str != "Wait":
+            if bpm_val > 0 and rhythm_str not in ["Wait", "LeadOff"]:
                 app = App.get_running_app()
                 if hasattr(app, 'csv_manager'):
                     app.csv_manager.save_data(bpm_val, hrv_val, rhythm_str)
 
         except Exception as e:
-            # 静默处理通讯过程中的残缺行
             pass
 
     def stop(self):
@@ -353,7 +356,7 @@ class HardwareThread(threading.Thread):
 
 
 # ==========================================
-# 2. 精密 ECG 绘图 Widget (保持原始你的代码不变)
+# 2. 精密 ECG 绘图 Widget (安全滤波)
 # ==========================================
 from kivy.uix.floatlayout import FloatLayout
 
@@ -440,7 +443,6 @@ class ECGPlotWidget(FloatLayout):
         self.plot_rect = (plot_x, plot_y, plot_w, plot_h)
 
     def push_data(self, value):
-        """优化后的滤波算法：显著降低增益，抑制溢出噪声"""
         try:
             raw = float(value)
 
@@ -451,20 +453,17 @@ class ECGPlotWidget(FloatLayout):
                 self.last_raw = raw
                 self.init_flag = True
 
-            # 2. 【基线漂移过滤】系数调至 0.92，让波形更稳地停留在0刻度线
+            # 2. 基线漂移过滤
             self.hpf = 0.92 * (self.hpf + raw - self.last_raw)
             self.last_raw = raw
 
-            # 3. 【软件低通平滑】增强平滑度，吸收 50Hz 工频噪点
-            # 0.1 的权重会让波形线条更细、更圆润，不会出现毛刺团
+            # 3. 软件低通平滑
             self.lpf = self.lpf * 0.9 + self.hpf * 0.1
 
-            # 4. 【核心改动：增益调整】
-            # 将原来的 18.0 降为 1.5 到 3.0 之间。
-            # 如果波形还是满屏，就改小（如 1.0）；如果波形太小，就改大（如 4.0）。
+            # 4. 增益调整
             final_value = self.lpf * 2.5
 
-            # 5. 安全限幅 (防止撞击上下边界)
+            # 5. 安全限幅
             final_value = max(-55, min(55, final_value))
 
             self.ecg_buffer[self.ptr] = final_value
@@ -504,26 +503,17 @@ class ECGPlotWidget(FloatLayout):
 
 
 # ==========================================
-# 3. 主应用 App (已加入安卓蓝牙运行时权限请求)
+# 3. 主应用 App
 # ==========================================
 class ECGApp(App):
     def build(self):
         self.title = "AI辅助心电预警系统 "
 
-        # 在安卓启动首帧时，动态请求蓝牙和定位权限
-        if platform == 'android':
-            from android.permissions import request_permissions, Permission
-            request_permissions([
-                Permission.BLUETOOTH_CONNECT,
-                Permission.BLUETOOTH_SCAN,
-                Permission.ACCESS_FINE_LOCATION,
-                Permission.ACCESS_COARSE_LOCATION
-            ])
-
+        # 初始模式设为待机
+        self.diag_status = 'IDLE'
         self.current_bpm = 0
         self.current_hrv = 0
         self.current_rhythm = "Normal"
-        self.diag_status = 'IDLE'
         self.prep_countdown = 0
         self.valid_data_ticks = 0
         self.rhythm_history = deque(maxlen=10)
@@ -579,12 +569,28 @@ class ECGApp(App):
         Clock.schedule_interval(self.update_ui, 0.5)
         self.heart_anim_event = Clock.schedule_interval(self.animate_heart, 0.8)
 
-        self.hw_thread = HardwareThread(self.on_serial_data, self.update_conn_ui)
-        self.hw_thread.start()
+        # 安卓端在授权完毕后直接起线程
+        if platform == 'android':
+            from android.permissions import request_permissions, Permission
+            def on_permissions_result(permissions, grant_results):
+                self.start_hardware_thread()
+
+            request_permissions([
+                Permission.BLUETOOTH_CONNECT,
+                Permission.BLUETOOTH_SCAN,
+                Permission.ACCESS_FINE_LOCATION,
+                Permission.ACCESS_COARSE_LOCATION
+            ], on_permissions_result)
+        else:
+            self.start_hardware_thread()
 
         self.csv_manager = CSVDataManager()
 
         return root
+
+    def start_hardware_thread(self):
+        self.hw_thread = HardwareThread(self.on_serial_data, self.update_conn_ui)
+        self.hw_thread.start()
 
     def update_conn_ui(self, msg):
         Clock.schedule_once(lambda dt: setattr(self.advice_box, 'text', msg), 0)
@@ -592,18 +598,26 @@ class ECGApp(App):
     def on_serial_data(self, ecg_val, bpm_val, hrv_val, rhythm_str):
         self.last_valid_data_time = time.time()
 
-        # 这里获取滤波后的干净值
+        # 如果收到数据判断为脱落状态
+        if rhythm_str == "LeadOff":
+            self.current_bpm = 0
+            self.current_hrv = 0
+            self.current_rhythm = "LeadOff"
+            return
+
         clean_ecg = self.graph.push_data(ecg_val)
 
-        # 将干净值录入 CSV (这就是你想要的“移动端测到的数据”)
+        # 正常状态下才录入 CSV
         if clean_ecg is not None and self.diag_status == 'RUNNING':
             self.csv_manager.save_waveform(clean_ecg)
 
         if bpm_val > 0:
             self.current_bpm = bpm_val
             self.current_hrv = hrv_val
-            if rhythm_str != "Wait":
+            if rhythm_str not in ["Wait", "LeadOff"]:
                 self.current_rhythm = rhythm_str
+            else:
+                self.current_rhythm = "Normal"  # 恢复状态
 
         if self.diag_status != 'IDLE':
             self.graph.display_mode = 'WAVE'
@@ -613,7 +627,7 @@ class ECGApp(App):
         self.heart_label.color = get_color_from_hex('#c0392b')
         Clock.schedule_once(lambda dt: self.reset_heart(), 0.15)
 
-        if self.current_bpm > 30 and self.diag_status != 'IDLE':
+        if self.current_bpm > 30 and self.current_rhythm != "LeadOff" and self.diag_status != 'IDLE':
             interval = max(300, min(60000 // self.current_bpm, 2000))
             self.heart_anim_event.cancel()
             self.heart_anim_event = Clock.schedule_interval(self.animate_heart, interval / 1000.0)
@@ -647,6 +661,27 @@ class ECGApp(App):
         now_time = time.time()
         is_disconnected = (now_time - self.last_valid_data_time) > 1.5
 
+        if self.current_rhythm == "LeadOff":
+            self.bpm_label.text = "--"
+            self.hrv_label.text = "HRV: -- ms"
+            self.graph.display_mode = 'FLAT'
+
+            if self.diag_status in ['PREPARING', 'RUNNING']:
+                # 强行重置诊断状态
+                self.diag_status = 'IDLE'
+                self.btn_diag.disabled = False
+                self.btn_diag.text = "重新诊断"
+
+            self.status_label.text = "状态: 导联脱落/未贴紧"
+            self.status_label.color = get_color_from_hex('#d35400')
+            self.advice_box.text = (
+                f"{E('⚠️')}【导联端未就绪/脱落】\n"
+                "检测到输入引脚电平饱和，请确认：\n"
+                "1. 三片导联极片已按规粘紧在皮肤上（清除汗水以防接触不良）。\n"
+                "2. 心电口线插头是否完全扣实上紧。"
+            )
+            return
+
         if self.diag_status == 'IDLE':
             self.bpm_label.text = "--"
             self.hrv_label.text = "HRV: -- ms"
@@ -661,9 +696,7 @@ class ECGApp(App):
             if self.diag_status in ['PREPARING', 'RUNNING']:
                 self.advice_box.text = (
                     f"{E('⚠️')}【检测中断警告：链路静默】\n"
-                    "未侦测到实时硬件波形！请确认：\n"
-                    "1. 连接线是否插稳，COM/蓝牙 通讯端是否被占用。\n"
-                    "2. 传感器导联金属片是否完全贴紧肌肤导电。"
+                    "未侦测到实时硬件波形！请确认波形板和蓝牙工作正常。"
                 )
                 self.diag_status = 'IDLE'
                 self.btn_diag.disabled = False
@@ -759,7 +792,8 @@ class ECGApp(App):
         popup.open()
 
     def on_stop(self):
-        self.hw_thread.stop()
+        if hasattr(self, 'hw_thread'):
+            self.hw_thread.stop()
 
 
 if __name__ == '__main__':
