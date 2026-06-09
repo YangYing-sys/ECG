@@ -173,9 +173,6 @@ class HardwareThread(threading.Thread):
 
     def run_bluetooth_mode(self):
         """ 专门给手机 APP 连蓝牙模块（HC-05）的方法 """
-        self.status_callback("【蓝牙寻找】寻找配对的 HC-05 设备...")
-
-        # === 关键修改 1：将子线程附着在 JVM 上，防止 JNI 调用底层闪退 ===
         import jnius
         jnius.attach_thread()
 
@@ -183,38 +180,75 @@ class HardwareThread(threading.Thread):
             from jnius import autoclass
             BluetoothAdapter = autoclass('android.bluetooth.BluetoothAdapter')
             UUID = autoclass('java.util.UUID')
-            adapter = BluetoothAdapter.getDefaultAdapter()
+            Integer = autoclass('java.lang.Integer')
 
-            if adapter is None or not adapter.isEnabled():
-                self.status_callback("【错误】蓝牙未开启，请先在手机设置中打开蓝牙！")
+            socket = None
+
+            # 循环检测与尝试连接：解决权限异步响应延迟以及HC-05意外断开重连
+            while self.running:
+                adapter = BluetoothAdapter.getDefaultAdapter()
+                if adapter is None:
+                    self.status_callback("【错误】当前安装设备不支持蓝牙！")
+                    time.sleep(5)
+                    continue
+
+                if not adapter.isEnabled():
+                    self.status_callback("【提示】蓝牙未开启，请先在手机设置中打开蓝牙！")
+                    time.sleep(5)
+                    continue
+
+                # 尝试抓取已配对设备
+                try:
+                    paired_devices = adapter.getBondedDevices().toArray()
+                except Exception as e:
+                    self.status_callback("【权限等待】正在等待授权，或者未在手机设置中开启蓝牙/位置权限...")
+                    time.sleep(3)
+                    continue
+
+                hc05_device = None
+                # 优先寻找名字里带 HC-05 的设备
+                for device in paired_devices:
+                    name = device.getName()
+                    if name and ("HC-05" in name or "HC05" in name or "JDY" in name):
+                        hc05_device = device
+                        break
+
+                # 回退：如果没有叫HC-05的，默认尝试抓取第一个配对好的设备
+                if not hc05_device and len(paired_devices) > 0:
+                    hc05_device = paired_devices[0]
+
+                if not hc05_device:
+                    self.status_callback("【未匹配】请先去【手机系统设置->蓝牙】中配对连接HC-05！")
+                    time.sleep(5)
+                    continue
+
+                self.status_callback(f"【蓝牙】正在尝试联通: {hc05_device.getName()}...")
+
+                try:
+                    # 优先使用：标准 RFCOMM 通道握手连接
+                    uuid = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
+                    socket = hc05_device.createRfcommSocketToServiceRecord(uuid)
+                    socket.connect()
+                except Exception as standard_err:
+                    # 备用使用：反射机制直接连接通道 1 (绕过高版本安卓对于标准 SPP 的系统拦截)
+                    try:
+                        method = hc05_device.getClass().getMethod("createRfcommSocket", [Integer.TYPE])
+                        socket = method.invoke(hc05_device, [Integer(1)])
+                        socket.connect()
+                    except Exception as e_reflect:
+                        self.status_callback(f"【连接异常】由于设备占用或信号弱，无法连接。5秒后重试...")
+                        time.sleep(5)
+                        continue
+
+                # 握手成功，直接跳出重试循环
+                break
+
+            if not self.running:
+                if socket: socket.close()
                 return
-
-            paired_devices = adapter.getBondedDevices().toArray()
-            hc05_device = None
-
-            # 优先寻找名字里带 HC-05 的设备
-            for device in paired_devices:
-                name = device.getName()
-                if name and ("HC-05" in name or "HC05" in name or "JDY" in name):
-                    hc05_device = device
-                    break
-
-            # 如果没找到带特定名字的，自动回退到第一个绑定的设备
-            if not hc05_device and len(paired_devices) > 0:
-                hc05_device = paired_devices[0]
-
-            if not hc05_device:
-                self.status_callback("【错误】未找到已配对的蓝牙设备，请前往手机设置配对！")
-                return
-
-            self.status_callback(f"【蓝牙】正在连接: {hc05_device.getName()}...")
-            # 蓝牙串口服务标准 UUID (SPP)
-            uuid = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
-            socket = hc05_device.createRfcommSocketToServiceRecord(uuid)
-            socket.connect()
 
             input_stream = socket.getInputStream()
-            self.status_callback("【硬件链路】HC-05蓝牙连接成功！开始接收数据...")
+            self.status_callback("【硬件链路】HC-05蓝牙联通成功！开始实时接收ECG数据...")
 
             buffer = ""
             while self.running:
@@ -233,13 +267,15 @@ class HardwareThread(threading.Thread):
         except Exception as e:
             self.status_callback(f"【蓝牙链路中断】: {str(e)}")
         finally:
-            # === 解除 JVM 附着，防止内存泄漏 ===
+            if socket:
+                try:
+                    socket.close()
+                except:
+                    pass
             jnius.detach_thread()
 
     def run_serial_mode(self):
         self.status_callback("【探测中】正在寻找 USB 链路...")
-
-        # === 关键修改 2：仅在电脑端调用时动态导入串口模块，安卓端完全不导入 ===
         try:
             import serial
             import serial.tools.list_ports
@@ -474,7 +510,7 @@ class ECGApp(App):
     def build(self):
         self.title = "AI辅助心电预警系统 "
 
-        # === 关键修改 3：在安卓启动首帧时，动态请求蓝牙和定位权限 ===
+        # 在安卓启动首帧时，动态请求蓝牙和定位权限
         if platform == 'android':
             from android.permissions import request_permissions, Permission
             request_permissions([
